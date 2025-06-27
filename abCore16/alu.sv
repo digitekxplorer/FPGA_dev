@@ -92,15 +92,31 @@ module alu (
             end
             
             `ALU_L_AND: begin 
-                Result = A && B;
+                // The 1-bit result of the logical AND
+                logic land_result_bit;
+//                land_result_bit = ( |A ) & ( |B );
+                land_result_bit = (A!=0 && B!=0);
+                // Extend the 1-bit result to the full 16-bit data width
+                Result = {15'b0, land_result_bit}; // This produces 16'h0001 or 16'h0000
                 Carry = 1'b0; Overflow = 1'b0; // Cleared for logical ops
             end
+            
             `ALU_L_OR: begin 
-                Result = A || B;
+                // The 1-bit result of the logical OR
+                logic lor_result_bit;
+//                lor_result_bit = ( |A ) | ( |B );
+                lor_result_bit = (A!=0 || B!=0);
+                // Extend the 1-bit result to the full 16-bit data width
+                Result = {15'b0, lor_result_bit}; // This produces 16'h0001 or 16'h0000
                 Carry = 1'b0; Overflow = 1'b0; // Cleared for logical ops
             end 
+            
             `ALU_L_NOT: begin 
-                Result = !A;
+                // The 1-bit result of the logical NOT
+                logic lnot_result_bit;
+                lnot_result_bit = (A == 16'h0000);
+                // Extend the 1-bit result to the full 16-bit data width
+                Result = {15'b0, lnot_result_bit}; // Produces 16'h0001 or 16'h0000
                 Carry = 1'b0; Overflow = 1'b0; // Cleared for logical ops
             end    
  
