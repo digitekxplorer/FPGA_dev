@@ -68,15 +68,13 @@ module control_unit (
     output logic       halted_o
 );
 
-
     // Local Signals  
     logic       ir_opcode_load_en;
     logic       ir_operand1_load_en;
     logic       ir_operand2_load_en;
     logic       ir_operand3_load_en;
-    
-    logic        ir_operand2_load_en_dly;
-    logic        ir_operand3_load_en_dly;
+    logic       ir_operand2_load_en_dly;
+    logic       ir_operand3_load_en_dly;
      
     logic [7:0] ir_opcode_reg;
     logic [7:0] ir_operand1_reg; // Holds byte 2 of instruction
@@ -91,7 +89,6 @@ module control_unit (
     typedef enum logic [3:0] { 
         S_RESET, S_FETCH_OPCODE, 
         S_DECODE,
-//        S_FETCH_OP1, S_FETCH_OP2, S_FETCH_OP3,
         S_FETCH_OP1, S_FETCH_OP2, S_FETCH_OP3, S_DLY01, S_DLY02,   // ab: one clk delays
         S_EXECUTE, S_MEM_ACCESS, S_WRITEBACK, S_HALTED 
     } state_t;
@@ -114,12 +111,10 @@ module control_unit (
     always_comb begin
         total_instr_bytes = 3'd1;
         case(ir_opcode_reg)
-            `OP_LOAD, `OP_STORE, `OP_LOADM, `OP_INM, `OP_OUTM, `OP_JMPZ, `OP_JMPN: total_instr_bytes = 3'd4;
+            `OP_LOAD, `OP_STORE, `OP_LOADM, `OP_INM, `OP_OUTM, `OP_JMPZ, `OP_JMPN, `OP_L_AND, `OP_L_OR: total_instr_bytes = 3'd4;
             `OP_ADD, `OP_SUB, `OP_MUL, `OP_AND, `OP_OR, `OP_XOR, `OP_CMP, `OP_MOV, `OP_SHL, `OP_SHR,
             `OP_JMP, `OP_JE, `OP_JNE, `OP_JS, `OP_JNS, `OP_JC, `OP_JNC, `OP_JO, `OP_JNO, `OP_CALL,
-            `OP_LOADI, `OP_STORI: total_instr_bytes = 3'd3;
-            `OP_L_AND, `OP_L_OR: total_instr_bytes = 3'd4;
-            `OP_L_NOT: total_instr_bytes = 3'd3;
+            `OP_LOADI, `OP_STORI, `OP_L_NOT: total_instr_bytes = 3'd3;
             `OP_INC, `OP_DEC, `OP_NOT, `OP_INP, `OP_OUT, `OP_PUSH, `OP_POP, `OP_MOVFRSP, `OP_MOVTOSP: total_instr_bytes = 3'd2;
             `OP_RET, `OP_NOP, `OP_HALT: total_instr_bytes = 3'd1;
             default: total_instr_bytes = 3'd1;
@@ -159,16 +154,13 @@ module control_unit (
                              next_state = S_FETCH_OP3;
                          end
                          else begin 
-//                             next_state = S_EXECUTE;      // original
                              // ab: add one clk delay to wait for data for JE
                              case (ir_opcode_reg)
-//                                 `OP_JE,`OP_JNE,`OP_JS,`OP_JNS,`OP_JC,`OP_JNC,`OP_JO,`OP_JNO,`OP_JMPZ,`OP_JMPN, `OP_JMP: next_state = S_DLY01;   // ab: add one clk delay to wait for data
                                  `OP_JE,`OP_JNE,`OP_JS,`OP_JNS,`OP_JC,`OP_JNC,`OP_JO,`OP_JNO, `OP_JMP: next_state = S_DLY01;   // ab: add one clk delay to wait for data
                                  default: next_state = S_EXECUTE;
                              endcase
                          end
             
-//            S_FETCH_OP3: next_state = S_EXECUTE;
             S_FETCH_OP3: 
                 case (ir_opcode_reg)
                     `OP_JMPZ,`OP_JMPN: next_state = S_DLY01;
@@ -184,9 +176,7 @@ module control_unit (
                     `OP_STORE, `OP_STORI, `OP_PUSH, `OP_CALL, `OP_OUTM: next_state = S_MEM_ACCESS;
                     `OP_L_AND, `OP_L_OR, `OP_L_NOT: next_state = S_WRITEBACK;
                     `OP_LOAD, `OP_ADD, `OP_SUB, `OP_CMP, `OP_MUL, `OP_INC, `OP_DEC, `OP_AND, `OP_OR, `OP_XOR, `OP_NOT,
-                    `OP_SHL, `OP_SHR, `OP_INP, `OP_MOVFRSP: next_state = S_WRITEBACK;
-//                    `OP_SHL, `OP_SHR, `OP_MOV, `OP_INP, `OP_MOVFRSP: next_state = S_WRITEBACK;
-                    `OP_MOV: next_state = S_WRITEBACK;
+                    `OP_SHL, `OP_SHR, `OP_MOV, `OP_INP, `OP_MOVFRSP: next_state = S_WRITEBACK;
                     `OP_JE,`OP_JNE,`OP_JS,`OP_JNS,`OP_JC,`OP_JNC,`OP_JO,`OP_JNO,`OP_JMPZ,`OP_JMPN: 
                         if (branch_condition_met) begin
                             next_state = S_DLY02;
@@ -242,18 +232,23 @@ module control_unit (
 
             S_EXECUTE, S_MEM_ACCESS, S_WRITEBACK: begin
                 // Decode operand fields first
+                // The first operand is always the destination
                 reg_dest_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];
 //                reg_src1_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];
-                reg_src2_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
+//                reg_src2_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
                 
                 case(ir_opcode_reg)
                     `OP_MOV: begin
-//                        reg_dest_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];
                         reg_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];     // write to different reg
+                        reg_src2_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
                     end 
+                    `OP_L_AND, `OP_L_OR, `OP_L_NOT: begin  // 3 operands: Rx = (Ry!=0 && Rz!=0)
+                        reg_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];     // write to different reg
+                        reg_src2_addr_out = ir_operand3_reg[`REG_ADDR_WIDTH-1:0];
+                    end
                     default: begin
-//                        reg_dest_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];
                         reg_src1_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];     // write back to same reg
+                        reg_src2_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
                     end
                 endcase
                 
@@ -284,9 +279,9 @@ module control_unit (
                     `OP_XOR:  if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_XOR; end
                     `OP_NOT:  if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_NOT; end
                     
-                    `OP_L_AND:  if(current_state==S_WRITEBACK) begin reg_write_en_out=1; alu_op_out=`ALU_L_AND; end
-                    `OP_L_OR:  if(current_state==S_WRITEBACK) begin reg_write_en_out=1; alu_op_out=`ALU_L_OR; end
-                    `OP_L_NOT:  if(current_state==S_WRITEBACK) begin reg_write_en_out=1; alu_op_out=`ALU_L_NOT; end
+                    `OP_L_AND:  if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_L_AND; end
+                    `OP_L_OR:   if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_L_OR; end
+                    `OP_L_NOT:  if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_L_NOT; end
                     
                     `OP_SHL:  if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_SHL; end
                     `OP_SHR:  if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_SHR; end
