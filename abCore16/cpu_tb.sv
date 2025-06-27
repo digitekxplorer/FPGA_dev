@@ -30,7 +30,7 @@ module cpu_tb;
 
     // Testbench Parameters
     localparam CLK_PERIOD     = 10;  // 100 MHz clock
-    localparam MAX_SIM_CYCLES = 500;
+    localparam MAX_SIM_CYCLES = 1300;
     
     // Important Note: Must update test result for each test
     localparam TEST_RESULT    = 30;
@@ -123,15 +123,22 @@ module cpu_tb;
 
     // This task monitors the GPIO port and captures the first value written.
     task monitor_gpio_out;
-        wait (gpio_out_we_tb_o === 1'b1); // Wait for the first write enable
+//        for ( int i= 0; i < 3; i++ ) begin
+        while ( !halted_from_dut ) begin
+            wait (gpio_out_we_tb_o === 1'b1); // Wait for the first write enable
         
-        // After the write enable is seen, wait for the next clock edge to ensure
-        // the output data is stable before capturing it.
-        @(posedge clk);
+            // After the write enable is seen, wait for the next clock edge to ensure
+            // the output data is stable before capturing it.
+            @(posedge clk);
         
-        captured_gpio_out = gpio_out_tb_o;
-        $display("TB @ %0t [Cycle %0d]: GPIO write detected! Captured Value = %0d (0x%h)",
+            captured_gpio_out = gpio_out_tb_o;
+            $display("TB @ %0t [Cycle %0d]: GPIO write detected! Captured Value = %0d (0x%h)",
                  $time, cycle_count, captured_gpio_out, captured_gpio_out);
+        
+            wait (gpio_out_we_tb_o === 1'b0); // Wait for signal to deassert
+            repeat (3) @(posedge clk);
+        
+        end // end for loop
     endtask
 
 endmodule
