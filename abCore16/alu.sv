@@ -90,15 +90,30 @@ module alu (
                 Result = ~A;
                 Carry = 1'b0; Overflow = 1'b0;
             end
+            
+            `ALU_L_AND: begin 
+                Result = A && B;
+                Carry = 1'b0; Overflow = 1'b0; // Cleared for logical ops
+            end
+            `ALU_L_OR: begin 
+                Result = A || B;
+                Carry = 1'b0; Overflow = 1'b0; // Cleared for logical ops
+            end 
+            `ALU_L_NOT: begin 
+                Result = !A;
+                Carry = 1'b0; Overflow = 1'b0; // Cleared for logical ops
+            end    
+ 
+            
             `ALU_SHL: begin // Logical Shift Left (shift amount from B)
-                logic [4:0] shift_amount = B[4:0]; // Use lower 5 bits for shift amount (0-31)
+                automatic logic [4:0] shift_amount = B[4:0]; // Use lower 5 bits for shift amount (0-31)
                 Result = A << shift_amount;
                 // Carry is the last bit shifted out of the MSB
                 Carry = (shift_amount > 0 && shift_amount <= `DATA_WIDTH) ? A[`DATA_WIDTH - shift_amount] : 1'b0;
                 Overflow = 1'b0;
             end
             `ALU_SHR: begin // Logical Shift Right (shift amount from B)
-                logic [4:0] shift_amount = B[4:0];
+                automatic logic [4:0] shift_amount = B[4:0];
                 Result = A >> shift_amount;
                 // Carry is the last bit shifted out of the LSB
                 Carry = (shift_amount > 0 && shift_amount <= `DATA_WIDTH) ? A[shift_amount-1] : 1'b0;
