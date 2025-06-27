@@ -28,24 +28,18 @@ module datapath (
     input  logic clk,
     input  logic rst_n,
 
-    // From Instruction Memory
-    input  logic [7:0]             imem_rdata_i, // Fetches one byte at a time
-
     // To Instruction Memory
     output logic [`ADDR_WIDTH-1:0] pc_to_imem_addr,
 
     // Control Signals from Control Unit
     input  logic        pc_write_en_from_cu,
     input  logic [2:0]  pc_src_sel_from_cu,
-    input  logic        ir_opcode_load_en_from_cu,
-    input  logic        ir_operand1_load_en_from_cu,
-    input  logic        ir_operand2_load_en_from_cu,
-    input  logic        ir_operand3_load_en_from_cu, // For 4th byte of 4-byte instructions
     input  logic        reg_write_en_from_cu,
     input  logic [`REG_ADDR_WIDTH-1:0] reg_dest_addr_from_cu,
     input  logic [`REG_ADDR_WIDTH-1:0] reg_src1_addr_from_cu,
     input  logic [`REG_ADDR_WIDTH-1:0] reg_src2_addr_from_cu,
     input  logic [1:0]  reg_write_data_sel_from_cu,
+    input  logic        flags_write_en_from_cu,
     input  logic [`DATA_WIDTH-1:0] imm_val_from_cu, // Assembled immediate from CU
     input  logic [3:0]  alu_op_from_cu,
     input  logic [1:0]  alu_src_a_sel_from_cu,
@@ -66,25 +60,38 @@ module datapath (
     input  logic [`DATA_WIDTH-1:0] gpio_in_data_bus,
     output logic [`DATA_WIDTH-1:0] gpio_out_data_bus,
 
-    // Outputs to Control Unit (from IR and Flags)
-    output logic [7:0]             opcode_byte_to_cu,
-    output logic [7:0]             operand1_byte_to_cu,
-    output logic [7:0]             operand2_byte_to_cu,
-    output logic [7:0]             operand3_byte_to_cu,
+    // Outputs to Control Unit (Flags)
     output logic                   ZF_to_cu, SF_to_cu, CF_to_cu, OF_to_cu,
     output logic                   reg_is_zero_to_cu,
     output logic                   reg_is_neg_to_cu
 );
 
+// ==============
+// Local signals
+// ==============
+// ALU
+logic [`DATA_WIDTH-1:0] alu_in_a, alu_in_b;
+logic [`DATA_WIDTH-1:0] alu_result_internal;
+logic alu_zf, alu_sf, alu_cf, alu_of;
+// PC
+logic [`ADDR_WIDTH-1:0] pc_reg, pc_next_calculated;
+// Register File
+logic [`DATA_WIDTH-1:0] rf_rdata1, rf_rdata2;
+logic [`DATA_WIDTH-1:0] rf_wdata_final;
+logic [`NUM_GP_REGS-1:0] [`DATA_WIDTH-1:0] register_file;
+logic [`ADDR_WIDTH-1:0] sp_reg;
+
     //================================================================
     // Program Counter (PC)
     //================================================================
-    logic [`ADDR_WIDTH-1:0] pc_reg, pc_next_calculated;
+//    logic [`ADDR_WIDTH-1:0] pc_reg, pc_next_calculated;
     assign pc_to_imem_addr = pc_reg;
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) pc_reg <= `ADDR_WIDTH'h0000;
-        else if (pc_write_en_from_cu) pc_reg <= pc_next_calculated;
+        if (!rst_n) 
+            pc_reg <= `ADDR_WIDTH'h0000;
+        else if (pc_write_en_from_cu) 
+            pc_reg <= pc_next_calculated;
     end
     
     // PC Next Logic
@@ -99,42 +106,14 @@ module datapath (
         endcase
     end
  
-    
-    //================================================================
-    // Instruction Register (IR) components
-    //================================================================
-    logic [7:0] ir_opcode_reg;
-    logic [7:0] ir_operand1_reg; // Holds byte 2 of instruction
-    logic [7:0] ir_operand2_reg; // Holds byte 3 of instruction
-    logic [7:0] ir_operand3_reg; // Holds byte 4 of instruction
-
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            ir_opcode_reg   <= `OP_NOP;
-            ir_operand1_reg <= 8'h00;
-            ir_operand2_reg <= 8'h00;
-            ir_operand3_reg <= 8'h00;
-        end else begin
-            if (ir_opcode_load_en_from_cu)   ir_opcode_reg   <= imem_rdata_i;
-            if (ir_operand1_load_en_from_cu) ir_operand1_reg <= imem_rdata_i;
-            if (ir_operand2_load_en_from_cu) ir_operand2_reg <= imem_rdata_i;
-            if (ir_operand3_load_en_from_cu) ir_operand3_reg <= imem_rdata_i;
-        end
-    end
-    
-    // Outputs from IR to Control Unit for decoding
-    assign opcode_byte_to_cu   = ir_opcode_reg;
-    assign operand1_byte_to_cu = ir_operand1_reg;
-    assign operand2_byte_to_cu = ir_operand2_reg;
-    assign operand3_byte_to_cu = ir_operand3_reg;
 
     //================================================================
     // Register File (R0-R7) and Stack Pointer (SP)
     //================================================================
-    logic [`DATA_WIDTH-1:0] rf_rdata1, rf_rdata2;
-    logic [`DATA_WIDTH-1:0] rf_wdata_final;
-    logic [`NUM_GP_REGS-1:0] [`DATA_WIDTH-1:0] register_file;
-    logic [`ADDR_WIDTH-1:0] sp_reg;
+//    logic [`DATA_WIDTH-1:0] rf_rdata1, rf_rdata2;
+//    logic [`DATA_WIDTH-1:0] rf_wdata_final;
+//    logic [`NUM_GP_REGS-1:0] [`DATA_WIDTH-1:0] register_file;
+//    logic [`ADDR_WIDTH-1:0] sp_reg;
 
     // GPR Asynchronous Read
     assign rf_rdata1 = (reg_src1_addr_from_cu < `NUM_GP_REGS) ? register_file[reg_src1_addr_from_cu] : 16'b0;
@@ -159,13 +138,50 @@ module datapath (
         else if (reg_write_en_from_cu && reg_dest_addr_from_cu == `SP_REG_ADDR) // For MOVTOSP
             sp_reg <= rf_wdata_final;
     end
+    
+    // Flags Logic
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ZF_to_cu <= 1'b0;
+            SF_to_cu <= 1'b0;
+            CF_to_cu <= 1'b0;
+            OF_to_cu <= 1'b0;
+        end
+        else if (flags_write_en_from_cu) begin 
+            ZF_to_cu <= alu_zf;
+            SF_to_cu <= alu_sf;
+            CF_to_cu <= alu_cf;
+            OF_to_cu <= alu_of;
+        end
+    end
+
+//    logic ZF_reg; logic SF_reg;
+//    logic CF_reg; logic OF_reg;
+//    always_ff @(posedge clk or negedge rst_n) begin
+//        if (!rst_n) begin
+//            ZF_reg <= 1'b0;
+//            SF_reg <= 1'b0;
+//            CF_reg <= 1'b0;
+//            OF_reg <= 1'b0;
+//        end
+//        else if (flags_write_en_from_cu) begin 
+//            ZF_reg <= alu_zf;
+//            SF_reg <= alu_sf;
+//            CF_reg <= alu_cf;
+//            OF_reg <= alu_of;
+//        end
+//    end
+    
+//    assign ZF_to_cu = alu_zf; assign SF_to_cu = alu_sf;
+//    assign CF_to_cu = alu_cf; assign OF_to_cu = alu_of;
+ 
 
     //================================================================
     // ALU
     //================================================================
-    logic [`DATA_WIDTH-1:0] alu_in_a, alu_in_b;
-    logic [`DATA_WIDTH-1:0] alu_result_internal;
-    logic alu_zf, alu_sf, alu_cf, alu_of;
+//    logic [`DATA_WIDTH-1:0] alu_in_a, alu_in_b;
+//    logic [`DATA_WIDTH-1:0] alu_result_internal;
+//    logic alu_zf, alu_sf, alu_cf, alu_of;
 
     // ALU Input Muxes
     always_comb begin
@@ -192,8 +208,8 @@ module datapath (
         .Carry(alu_cf), 
         .Overflow(alu_of)
     );
-    assign ZF_to_cu = alu_zf; assign SF_to_cu = alu_sf;
-    assign CF_to_cu = alu_cf; assign OF_to_cu = alu_of;
+//    assign ZF_to_cu = alu_zf; assign SF_to_cu = alu_sf;
+//    assign CF_to_cu = alu_cf; assign OF_to_cu = alu_of;
 
     //================================================================
     // Write-back and Output Logic
@@ -204,6 +220,7 @@ module datapath (
             `WB_SRC_ALU:    rf_wdata_final = alu_result_internal;  // 00
             `WB_SRC_MEM:    rf_wdata_final = dmem_rdata_in;        // 01
             `WB_SRC_SP:     rf_wdata_final = sp_reg; // For MOVFRSP   10
+            `WB_SRC_GPIO:   rf_wdata_final = gpio_in_data_bus;
             default:        rf_wdata_final = alu_result_internal;
         endcase
     end
