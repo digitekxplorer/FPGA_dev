@@ -23,7 +23,7 @@
 
 `include "defines.svh"
 
-//`define SIMULATION
+`define SIMULATION
 
 module cpu_tl (
     input  logic clk,
@@ -43,10 +43,6 @@ module cpu_tl (
     //================================================================
 
     // --- From Datapath TO Control Unit ---
-    logic [7:0] opcode_byte_from_dp;
-    logic [7:0] operand1_byte_from_dp;
-    logic [7:0] operand2_byte_from_dp;
-    logic [7:0] operand3_byte_from_dp;
     logic zf_from_dp, sf_from_dp, cf_from_dp, of_from_dp;
     logic reg_is_zero_from_dp;
     logic reg_is_neg_from_dp;
@@ -54,15 +50,12 @@ module cpu_tl (
     // --- From Control Unit TO Datapath ---
     logic pc_write_en_to_dp;
     logic [2:0] pc_src_sel_to_dp;
-    logic ir_opcode_load_en_to_dp;
-    logic ir_operand1_load_en_to_dp;
-    logic ir_operand2_load_en_to_dp;
-    logic ir_operand3_load_en_to_dp; // For 4th byte
     logic reg_write_en_to_dp;
     logic [`REG_ADDR_WIDTH-1:0] reg_dest_addr_to_dp;
     logic [`REG_ADDR_WIDTH-1:0] reg_src1_addr_to_dp;
     logic [`REG_ADDR_WIDTH-1:0] reg_src2_addr_to_dp;
     logic [1:0] reg_write_data_sel_to_dp;
+    logic flags_write_en_to_dp;
     logic [`DATA_WIDTH-1:0] imm_val_to_dp;
     logic [3:0] alu_op_to_dp;
     logic [1:0] alu_src_a_sel_to_dp;
@@ -91,21 +84,17 @@ module cpu_tl (
     datapath dp_unit (
         .clk(clk),
         .rst_n(rst_n),
-        .imem_rdata_i(imem_rdata_i), // DP must receive instruction data to load its IR
         .pc_to_imem_addr(imem_addr_o),
         
         // Control signals from CU
         .pc_write_en_from_cu(pc_write_en_to_dp),
         .pc_src_sel_from_cu(pc_src_sel_to_dp),
-        .ir_opcode_load_en_from_cu(ir_opcode_load_en_to_dp),
-        .ir_operand1_load_en_from_cu(ir_operand1_load_en_to_dp),
-        .ir_operand2_load_en_from_cu(ir_operand2_load_en_to_dp),
-        .ir_operand3_load_en_from_cu(ir_operand3_load_en_to_dp),
         .reg_write_en_from_cu(reg_write_en_to_dp),
         .reg_dest_addr_from_cu(reg_dest_addr_to_dp),
         .reg_src1_addr_from_cu(reg_src1_addr_to_dp),
         .reg_src2_addr_from_cu(reg_src2_addr_to_dp),
         .reg_write_data_sel_from_cu(reg_write_data_sel_to_dp),
+        .flags_write_en_from_cu(flags_write_en_to_dp),
         .imm_val_from_cu(imm_val_to_dp),
         .alu_op_from_cu(alu_op_to_dp),
         .alu_src_a_sel_from_cu(alu_src_a_sel_to_dp),
@@ -127,10 +116,6 @@ module cpu_tl (
         .gpio_out_data_bus(gpio_out_o),
         
         // Outputs to CU
-        .opcode_byte_to_cu(opcode_byte_from_dp),
-        .operand1_byte_to_cu(operand1_byte_from_dp),
-        .operand2_byte_to_cu(operand2_byte_from_dp),
-        .operand3_byte_to_cu(operand3_byte_from_dp),
         .ZF_to_cu(zf_from_dp),
         .SF_to_cu(sf_from_dp),
         .CF_to_cu(cf_from_dp),
@@ -143,12 +128,9 @@ module cpu_tl (
     control_unit cu_unit (
         .clk(clk),
         .rst_n(rst_n),
+        .imem_rdata_i(imem_rdata_i), // DP must receive instruction data to load its IR
         
-        // Inputs from DP (Instruction Bytes and Flags)
-        .opcode_from_dp(opcode_byte_from_dp),
-        .operand1_from_dp(operand1_byte_from_dp),
-        .operand2_from_dp(operand2_byte_from_dp),
-        .operand3_from_dp(operand3_byte_from_dp),
+        // Inputs from DP (Flags)
         .ZF_in(zf_from_dp),
         .SF_in(sf_from_dp),
         .CF_in(cf_from_dp),
@@ -159,15 +141,12 @@ module cpu_tl (
         // Outputs to DP
         .pc_write_en_out(pc_write_en_to_dp),
         .pc_src_sel_out(pc_src_sel_to_dp),
-        .ir_opcode_load_en_out(ir_opcode_load_en_to_dp),
-        .ir_operand1_load_en_out(ir_operand1_load_en_to_dp),
-        .ir_operand2_load_en_out(ir_operand2_load_en_to_dp),
-        .ir_operand3_load_en_out(ir_operand3_load_en_to_dp),
         .reg_write_en_out(reg_write_en_to_dp),
         .reg_dest_addr_out(reg_dest_addr_to_dp),
         .reg_src1_addr_out(reg_src1_addr_to_dp),
         .reg_src2_addr_out(reg_src2_addr_to_dp),
         .reg_write_data_sel_out(reg_write_data_sel_to_dp),
+        .flags_write_en_out(flags_write_en_to_dp),           // ab
         .imm_val_to_dp_out(imm_val_to_dp),
         .alu_op_out(alu_op_to_dp),
         .alu_src_a_sel_out(alu_src_a_sel_to_dp),
@@ -191,7 +170,8 @@ module cpu_tl (
 //================================================================
 `ifdef SIMULATION
     // --- FOR SIMULATION: Use a fast, behavioral memory model ---
-    `define IMEM_HEX_FILE "myProg_add.hex" // << CHANGE THIS TO YOUR TEST PROGRAM
+//    `define IMEM_HEX_FILE "myProg_add.hex" // << CHANGE THIS TO YOUR TEST PROGRAM
+    `define IMEM_HEX_FILE "myProg_generic.hex" // << CHANGE THIS TO YOUR TEST PROGRAM
     
     initial begin
         $display("INFO: Compiling with SIMULATION behavioral memory model.");
