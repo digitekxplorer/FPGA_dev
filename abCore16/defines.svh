@@ -51,6 +51,10 @@
 `define OP_SHL      8'h24 // SHL Rd, #Imm8 (3 bytes)
 `define OP_SHR      8'h25 // SHR Rd, #Imm8 (3 bytes)
 
+`define OP_L_AND    8'h26 // LAND Rd, Rs1, Rs2 (4 bytes)
+`define OP_L_OR     8'h27 // LOR Rd, Rs1, Rs2 (4 bytes)
+`define OP_L_NOT    8'h28 // LNOT Rd, Rs (3 bytes)
+
 `define OP_INP      8'h30 // INP Rd (2 bytes)
 `define OP_OUT      8'h31 // OUT Rs (2 bytes)
 `define OP_INM      8'h32 // INM Rd, Addr16 (4 bytes)
@@ -119,6 +123,11 @@
 `define ALU_MUL     4'h8
 `define ALU_INC     4'h9
 `define ALU_DEC     4'hA
+
+`define ALU_L_AND   4'hB
+`define ALU_L_OR    4'hC
+`define ALU_L_NOT   4'hD
+
 `define ALU_PASS_A  4'hE // Pass input A through
 `define ALU_PASS_B  4'hF // Pass input B through
 `define ALU_NOP     4'hC // No operation
