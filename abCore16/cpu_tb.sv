@@ -30,7 +30,7 @@ module cpu_tb;
 
     // Testbench Parameters
     localparam CLK_PERIOD     = 10;  // 100 MHz clock
-    localparam MAX_SIM_CYCLES = 1300;
+    localparam MAX_SIM_CYCLES = 1000;
     
     // Important Note: Must update test result for each test
     localparam TEST_RESULT    = 30;
@@ -99,14 +99,12 @@ module cpu_tb;
             // The test program loaded via COE
             // NOTE: update TEST_RESULT for each test program
             if (captured_gpio_out == TEST_RESULT) begin
-            // if (gpio_out_tb_o == TEST_RESULT) begin
                 $display("TB TEST PASSED: GPIO output matches expected value %0d.", TEST_RESULT);
                 test_passed = 1'b1;
             end else if (captured_gpio_out === 'x) begin
                 $display("TB TEST FAILED: The OUT instruction never executed. No value was written to GPIO.");
                 test_passed = 1'b0;
             end else begin
-//                $display("TB TEST FAILED: GPIO output was 0x%h, expected 0x7530 (30000).", captured_gpio_out);
                 $display("TB TEST FAILED: GPIO output was 0x%h, expected %0d.", captured_gpio_out, TEST_RESULT);
                 test_passed = 1'b0;
             end
