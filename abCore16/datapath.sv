@@ -47,6 +47,7 @@ module datapath (
     input  logic        dmem_read_en_from_cu,
     input  logic        dmem_write_en_from_cu,
     input  logic [1:0]  dmem_addr_sel_from_cu,
+    input  logic        dmem_data_sel_from_cu,
     input  logic        sp_op_inc_from_cu,
     input  logic        sp_op_dec_from_cu,
 
@@ -84,7 +85,6 @@ logic [`ADDR_WIDTH-1:0] sp_reg;
     //================================================================
     // Program Counter (PC)
     //================================================================
-//    logic [`ADDR_WIDTH-1:0] pc_reg, pc_next_calculated;
     assign pc_to_imem_addr = pc_reg;
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -97,23 +97,19 @@ logic [`ADDR_WIDTH-1:0] sp_reg;
     // PC Next Logic
     always_comb begin
         case (pc_src_sel_from_cu)
-            `PC_SRC_PC_PLUS_1:  pc_next_calculated = pc_reg + 1;
-            `PC_SRC_IMM:        pc_next_calculated = imm_val_from_cu;
-            `PC_SRC_MEM:        pc_next_calculated = dmem_rdata_in;
-            `PC_SRC_PC_CURRENT: pc_next_calculated = pc_reg;
-            `PC_SRC_ALU:        pc_next_calculated = alu_result_internal;
+            `PC_SRC_PC_PLUS_1:  pc_next_calculated = pc_reg + 1;           //000
+            `PC_SRC_IMM:        pc_next_calculated = imm_val_from_cu;      //001
+            `PC_SRC_MEM:        pc_next_calculated = dmem_rdata_in;        //010
+            `PC_SRC_PC_CURRENT: pc_next_calculated = pc_reg;               //011
+            `PC_SRC_ALU:        pc_next_calculated = alu_result_internal;  //100
             default:            pc_next_calculated = pc_reg;
         endcase
     end
- 
+
 
     //================================================================
     // Register File (R0-R7) and Stack Pointer (SP)
     //================================================================
-//    logic [`DATA_WIDTH-1:0] rf_rdata1, rf_rdata2;
-//    logic [`DATA_WIDTH-1:0] rf_wdata_final;
-//    logic [`NUM_GP_REGS-1:0] [`DATA_WIDTH-1:0] register_file;
-//    logic [`ADDR_WIDTH-1:0] sp_reg;
 
     // GPR Asynchronous Read
     assign rf_rdata1 = (reg_src1_addr_from_cu < `NUM_GP_REGS) ? register_file[reg_src1_addr_from_cu] : 16'b0;
@@ -127,7 +123,7 @@ logic [`ADDR_WIDTH-1:0] sp_reg;
     end
 
     // SP Logic
-    localparam STACK_INIT_VAL_DP = `DATA_MEMORY_WORDS;
+    localparam STACK_INIT_VAL_DP = `DATA_MEMORY_BYTES/2;    // 4096 x 16 = 8192 bytes
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) 
             sp_reg <= STACK_INIT_VAL_DP;
@@ -154,34 +150,11 @@ logic [`ADDR_WIDTH-1:0] sp_reg;
             OF_to_cu <= alu_of;
         end
     end
-
-//    logic ZF_reg; logic SF_reg;
-//    logic CF_reg; logic OF_reg;
-//    always_ff @(posedge clk or negedge rst_n) begin
-//        if (!rst_n) begin
-//            ZF_reg <= 1'b0;
-//            SF_reg <= 1'b0;
-//            CF_reg <= 1'b0;
-//            OF_reg <= 1'b0;
-//        end
-//        else if (flags_write_en_from_cu) begin 
-//            ZF_reg <= alu_zf;
-//            SF_reg <= alu_sf;
-//            CF_reg <= alu_cf;
-//            OF_reg <= alu_of;
-//        end
-//    end
-    
-//    assign ZF_to_cu = alu_zf; assign SF_to_cu = alu_sf;
-//    assign CF_to_cu = alu_cf; assign OF_to_cu = alu_of;
  
 
     //================================================================
     // ALU
     //================================================================
-//    logic [`DATA_WIDTH-1:0] alu_in_a, alu_in_b;
-//    logic [`DATA_WIDTH-1:0] alu_result_internal;
-//    logic alu_zf, alu_sf, alu_cf, alu_of;
 
     // ALU Input Muxes
     always_comb begin
@@ -208,8 +181,6 @@ logic [`ADDR_WIDTH-1:0] sp_reg;
         .Carry(alu_cf), 
         .Overflow(alu_of)
     );
-//    assign ZF_to_cu = alu_zf; assign SF_to_cu = alu_sf;
-//    assign CF_to_cu = alu_cf; assign OF_to_cu = alu_of;
 
     //================================================================
     // Write-back and Output Logic
@@ -229,10 +200,19 @@ logic [`ADDR_WIDTH-1:0] sp_reg;
     assign dmem_we_out = dmem_write_en_from_cu;
     always_comb begin
         case (dmem_addr_sel_from_cu)
+            `DMEM_ADDR_SRC_IMM: dmem_addr_out = imm_val_from_cu;   // 00
+            `DMEM_ADDR_SRC_SP:  dmem_addr_out = sp_reg;            // 01
             `DMEM_ADDR_SRC_ALU: dmem_addr_out = alu_result_internal; // For LOADI/STORI
-            `DMEM_ADDR_SRC_SP:  dmem_addr_out = sp_reg;
-            `DMEM_ADDR_SRC_IMM: dmem_addr_out = imm_val_from_cu;
             default:            dmem_addr_out = 16'hDEAD;
+        endcase
+    end
+    
+    // During CALL instruction, we have to write the return address to the stack.
+    always_comb begin
+        case (dmem_data_sel_from_cu)
+            `DMEM_DATA_SRC_RF:   dmem_wdata_out = rf_rdata1;   // 0
+            `DMEM_DATA_SRC_PC:   dmem_wdata_out = pc_reg;      // 1 ; for CALL, rtn addr is PC, addr of next instr
+            default:             dmem_wdata_out = rf_rdata1;
         endcase
     end
     assign dmem_wdata_out = rf_rdata1;
