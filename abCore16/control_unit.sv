@@ -58,6 +58,7 @@ module control_unit (
     output logic       dmem_read_en_out,
     output logic       dmem_write_en_out,
     output logic [1:0] dmem_addr_sel_out,
+    output logic       dmem_data_sel_out,
     // Stack Pointer Control
     output logic       sp_op_inc_out,
     output logic       sp_op_dec_out,
@@ -89,8 +90,11 @@ module control_unit (
     typedef enum logic [3:0] { 
         S_RESET, S_FETCH_OPCODE, 
         S_DECODE,
-        S_FETCH_OP1, S_FETCH_OP2, S_FETCH_OP3, S_DLY01, S_DLY02,   // ab: one clk delays
-        S_EXECUTE, S_MEM_ACCESS, S_WRITEBACK, S_HALTED 
+        S_FETCH_OP1, S_FETCH_OP2, S_FETCH_OP3, 
+        S_BRAM_DLY, S_BRANCH_DLY, // ab: one clk delays
+        S_RTN_ADDR,
+        S_EXECUTE, S_MEM_ACCESS, S_PCWREN, S_WRITEBACK, S_HALTED
+//        S_EXECUTE, S_MEM_ACCESS, S_WRITEBACK, S_HALTED 
     } state_t;
     state_t current_state, next_state;
 
@@ -111,11 +115,15 @@ module control_unit (
     always_comb begin
         total_instr_bytes = 3'd1;
         case(ir_opcode_reg)
+            // 4-byte instructions
             `OP_LOAD, `OP_STORE, `OP_LOADM, `OP_INM, `OP_OUTM, `OP_JMPZ, `OP_JMPN, `OP_L_AND, `OP_L_OR: total_instr_bytes = 3'd4;
+            // 3-byte instructions
             `OP_ADD, `OP_SUB, `OP_MUL, `OP_AND, `OP_OR, `OP_XOR, `OP_CMP, `OP_MOV, `OP_SHL, `OP_SHR,
             `OP_JMP, `OP_JE, `OP_JNE, `OP_JS, `OP_JNS, `OP_JC, `OP_JNC, `OP_JO, `OP_JNO, `OP_CALL,
             `OP_LOADI, `OP_STORI, `OP_L_NOT: total_instr_bytes = 3'd3;
+            // 2-byte instructions
             `OP_INC, `OP_DEC, `OP_NOT, `OP_INP, `OP_OUT, `OP_PUSH, `OP_POP, `OP_MOVFRSP, `OP_MOVTOSP: total_instr_bytes = 3'd2;
+            // 1-byte instructions
             `OP_RET, `OP_NOP, `OP_HALT: total_instr_bytes = 3'd1;
             default: total_instr_bytes = 3'd1;
         endcase
@@ -154,21 +162,25 @@ module control_unit (
                              next_state = S_FETCH_OP3;
                          end
                          else begin 
-                             // ab: add one clk delay to wait for data for JE
+                             // ab: add one clk delay to wait for data for operand read from BRAM
                              case (ir_opcode_reg)
-                                 `OP_JE,`OP_JNE,`OP_JS,`OP_JNS,`OP_JC,`OP_JNC,`OP_JO,`OP_JNO, `OP_JMP: next_state = S_DLY01;   // ab: add one clk delay to wait for data
+                                 `OP_JE,`OP_JNE,`OP_JS,`OP_JNS,`OP_JC,`OP_JNC,`OP_JO,`OP_JNO, `OP_JMP,`OP_SHL, `OP_CALL: next_state = S_BRAM_DLY;   // add one clk delay for BRAM access
                                  default: next_state = S_EXECUTE;
                              endcase
                          end
             
             S_FETCH_OP3: 
                 case (ir_opcode_reg)
-                    `OP_JMPZ,`OP_JMPN: next_state = S_DLY01;
+                    `OP_JMPZ,`OP_JMPN: next_state = S_BRAM_DLY;
                     default: next_state = S_EXECUTE;
                 endcase
             
             // For Jumps, we need one clk delay to setup destination address (imm_val_to_dp_out)
-            S_DLY01: next_state = S_EXECUTE;
+            S_BRAM_DLY: 
+                case (ir_opcode_reg)
+//                    `OP_CALL: begin next_state = S_PC_REG_DLY; end
+                    default: next_state = S_EXECUTE;
+                endcase
             
             S_EXECUTE:
                 case (ir_opcode_reg)
@@ -179,27 +191,46 @@ module control_unit (
                     `OP_SHL, `OP_SHR, `OP_MOV, `OP_INP, `OP_MOVFRSP: next_state = S_WRITEBACK;
                     `OP_JE,`OP_JNE,`OP_JS,`OP_JNS,`OP_JC,`OP_JNC,`OP_JO,`OP_JNO,`OP_JMPZ,`OP_JMPN: 
                         if (branch_condition_met) begin
-                            next_state = S_DLY02;
+                            next_state = S_BRANCH_DLY;
                         end
                         else begin
                             next_state = S_FETCH_OPCODE;
                         end
-                    `OP_JMP: next_state = S_DLY02;  
+                    `OP_JMP: next_state = S_BRANCH_DLY; 
+                    `OP_RET: next_state = S_MEM_ACCESS;
                     default: next_state = S_FETCH_OPCODE; // Jumps, CMP, NOP, RET, OUT
                 endcase
                 
             // For Jumps, we need one clk delay to get new opcode loaded into ir_opcode_reg
-            S_DLY02: next_state = S_FETCH_OPCODE;
-            
-            S_MEM_ACCESS:
+            S_BRANCH_DLY:
                 case (ir_opcode_reg)
-                    `OP_LOADM, `OP_LOADI, `OP_POP, `OP_INM: next_state = S_WRITEBACK;
+                    `OP_RET: next_state = S_MEM_ACCESS;
                     default: next_state = S_FETCH_OPCODE;
                 endcase
                 
+            S_MEM_ACCESS:
+                case (ir_opcode_reg)
+                    `OP_LOADM, `OP_LOADI, `OP_POP, `OP_INM: next_state = S_WRITEBACK;
+                    `OP_RET: next_state = S_PCWREN;
+                    default: next_state = S_FETCH_OPCODE;
+                endcase
+
+            S_PCWREN: begin 
+                next_state = S_RTN_ADDR; 
+            end
+
+            // Need extra delay for the PC register
+            S_RTN_ADDR: begin 
+                next_state = S_FETCH_OPCODE; 
+            end
+                
             S_WRITEBACK:
-                 if (ir_opcode_reg == `OP_RET) next_state = S_EXECUTE; // RET needs to jump after pop
-                 else next_state = S_FETCH_OPCODE;
+                case (ir_opcode_reg)
+                    //
+                    default: next_state = S_FETCH_OPCODE;
+                endcase
+//                 if (ir_opcode_reg == `OP_RET) next_state = S_EXECUTE; // RET needs to jump after pop
+//                 else next_state = S_FETCH_OPCODE;
                  
             S_HALTED:       next_state = S_HALTED;
             default:        next_state = S_RESET;
@@ -212,10 +243,13 @@ module control_unit (
     always_comb begin
         // --- Default all outputs to inactive state ---
         pc_write_en_out = 1'b0; pc_src_sel_out = `PC_SRC_PC_PLUS_1;
-        ir_opcode_load_en = 1'b0; ir_operand1_load_en = 1'b0; ir_operand2_load_en = 1'b0; ir_operand3_load_en = 1'b0;
-        reg_write_en_out = 1'b0; reg_dest_addr_out = '0; reg_src1_addr_out = '0; reg_src2_addr_out = '0; reg_write_data_sel_out = `WB_SRC_ALU;
-        imm_val_to_dp_out = '0; alu_op_out = `ALU_NOP; alu_src_a_sel_out = `ALU_A_SRC_REG; alu_src_b_sel_out = `ALU_B_SRC_REG;
-        dmem_read_en_out = 1'b0; dmem_write_en_out = 1'b0; dmem_addr_sel_out = `DMEM_ADDR_SRC_IMM;
+        ir_opcode_load_en = 1'b0; ir_operand1_load_en = 1'b0; 
+        ir_operand2_load_en = 1'b0; ir_operand3_load_en = 1'b0;
+        reg_write_en_out = 1'b0; reg_dest_addr_out = '0; 
+        reg_src1_addr_out = '0; reg_src2_addr_out = '0; reg_write_data_sel_out = `WB_SRC_ALU;
+        imm_val_to_dp_out = '0; alu_op_out = `ALU_NOP; alu_src_a_sel_out = `ALU_A_SRC_REG; 
+        alu_src_b_sel_out = `ALU_B_SRC_REG; dmem_read_en_out = 1'b0; dmem_write_en_out = 1'b0; 
+        dmem_addr_sel_out = `DMEM_ADDR_SRC_IMM; dmem_data_sel_out = `DMEM_DATA_SRC_RF;
         sp_op_inc_out = 1'b0; sp_op_dec_out = 1'b0; flags_write_en_out = 1'b0;
         gpio_out_we = 1'b0;
 
@@ -226,23 +260,26 @@ module control_unit (
             S_FETCH_OP2:    begin pc_write_en_out = 1'b1; ir_operand2_load_en = 1'b1; end
             S_FETCH_OP3:    begin pc_write_en_out = 1'b1; ir_operand3_load_en = 1'b1; end
             
-            S_DLY01: begin end   // do nothing, one clk delay to wait for data from BRAM
+            S_BRAM_DLY: begin 
+                    // 
+            end   
             
-            S_DLY02: begin end   // do nothing, one clk delay to wait for branch
+            S_BRANCH_DLY: begin 
+                //
+            end
 
-            S_EXECUTE, S_MEM_ACCESS, S_WRITEBACK: begin
+            // Add states to this list that access the datatpath control signals
+            S_EXECUTE, S_MEM_ACCESS, S_WRITEBACK, S_RTN_ADDR, S_PCWREN: begin
                 // Decode operand fields first
                 // The first operand is always the destination
                 reg_dest_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];
-//                reg_src1_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];
-//                reg_src2_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
                 
                 case(ir_opcode_reg)
                     `OP_MOV: begin
                         reg_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];     // write to different reg
                         reg_src2_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
                     end 
-                    `OP_L_AND, `OP_L_OR, `OP_L_NOT: begin  // 3 operands: Rx = (Ry!=0 && Rz!=0)
+                    `OP_L_AND, `OP_L_OR, `OP_L_NOT: begin  // 3 operands: Rx = (Ry!=0 && Rz!=0); for L_NOT 3 operand not used
                         reg_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];     // write to different reg
                         reg_src2_addr_out = ir_operand3_reg[`REG_ADDR_WIDTH-1:0];
                     end
@@ -257,7 +294,7 @@ module control_unit (
                 case(ir_opcode_reg)
                     `OP_LOAD, `OP_LOADM, `OP_STORE, `OP_INM, `OP_OUTM, `OP_JMPZ, `OP_JMPN: 
                         imm_val_to_dp_out = {ir_operand3_reg, ir_operand2_reg};
-                    `OP_JMP, `OP_CALL, `OP_JE, `OP_JNE, `OP_JS, `OP_JNS, `OP_JC, `OP_JNC, `OP_JO, `OP_JNO: 
+                    `OP_JMP, `OP_JE, `OP_JNE, `OP_JS, `OP_JNS, `OP_JC, `OP_JNC, `OP_JO, `OP_JNO, `OP_CALL: 
                         imm_val_to_dp_out = {ir_operand2_reg, ir_operand1_reg};
                     `OP_SHL, `OP_SHR: 
                         imm_val_to_dp_out = {{8{ir_operand2_reg[7]}}, ir_operand2_reg}; // Sign-extend Imm8
@@ -267,6 +304,7 @@ module control_unit (
                 
                 // Set control signals based on state and opcode
                 case(ir_opcode_reg)
+                    // Note: these signals are asserted during S_WRITEBACK state
                     `OP_LOAD: if(current_state==S_WRITEBACK) begin reg_write_en_out=1; alu_src_b_sel_out=`ALU_B_SRC_IMM; alu_op_out=`ALU_PASS_B; end
                     `OP_ADD:  if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_ADD; end
                     `OP_SUB:  if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_SUB; end
@@ -283,53 +321,124 @@ module control_unit (
                     `OP_L_OR:   if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_L_OR; end
                     `OP_L_NOT:  if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_L_NOT; end
                     
-                    `OP_SHL:  if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_SHL; end
-                    `OP_SHR:  if(current_state==S_WRITEBACK) begin flags_write_en_out=1; reg_write_en_out=1; alu_op_out=`ALU_SHR; end
-                    `OP_OUT:  if(current_state==S_EXECUTE)   begin gpio_out_we=1; end
-                    `OP_HALT: if(current_state==S_HALTED)    begin pc_write_en_out=1; pc_src_sel_out=`PC_SRC_PC_CURRENT; end
-                    `OP_JMP:  if(current_state==S_EXECUTE)   begin pc_write_en_out=1; pc_src_sel_out=`PC_SRC_IMM; end
-                    `OP_JE,`OP_JNE,`OP_JS,`OP_JNS,`OP_JC,`OP_JNC,`OP_JO,`OP_JNO,`OP_JMPZ,`OP_JMPN: 
-                              if(current_state==S_EXECUTE && branch_condition_met) begin 
-                                  pc_write_en_out=1; 
-                                  pc_src_sel_out=`PC_SRC_IMM; 
-                               end
-                    `OP_PUSH: if(current_state==S_EXECUTE)   begin 
-                                  sp_op_dec_out=1; 
-                              end
-                              else if(current_state==S_MEM_ACCESS) begin 
-                                  dmem_write_en_out=1; 
-                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP; 
-                              end
-                    `OP_POP:  if(current_state==S_EXECUTE)   begin 
-                                  sp_op_inc_out=1; 
-                              end
-                              else if(current_state==S_MEM_ACCESS) begin 
-                                  dmem_read_en_out=1; 
-                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP; 
-                              end
-                              else if(current_state==S_WRITEBACK) begin 
-                                  reg_write_en_out=1; 
-                                  reg_write_data_sel_out=`WB_SRC_MEM; 
-                              end
-                    `OP_RET:  if(current_state==S_WRITEBACK) begin 
-                                  sp_op_inc_out=1; 
-                                  dmem_read_en_out=1; 
-                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP; 
-                                  pc_src_sel_out=`PC_SRC_MEM; 
-                              end
-                              else if(current_state==S_EXECUTE) begin 
-                                  pc_write_en_out=1; 
-                              end
-                    
                     `OP_MOV: if(current_state==S_WRITEBACK) begin 
                         reg_write_en_out=1;
                         alu_src_a_sel_out = `ALU_A_SRC_REG;
                         reg_write_data_sel_out=`WB_SRC_ALU; 
                         alu_op_out=`ALU_PASS_A; 
                     end
-                    
                     `OP_MOVFRSP: if(current_state==S_WRITEBACK) begin reg_write_en_out=1; reg_write_data_sel_out=`WB_SRC_SP; end
                     `OP_MOVTOSP: if(current_state==S_WRITEBACK) begin reg_write_en_out=1; reg_dest_addr_out=`SP_REG_ADDR; alu_op_out=`ALU_PASS_A; end
+                    
+                    // Note: these signals are asserted during S_HALTED state
+                    `OP_HALT: if(current_state==S_HALTED)    begin pc_write_en_out=1; pc_src_sel_out=`PC_SRC_PC_CURRENT; end
+                    
+                    // Note: these signals are asserted during S_EXECUTE state
+                    `OP_OUT:  if(current_state==S_EXECUTE)   begin gpio_out_we=1; end
+                    `OP_JMP:  if(current_state==S_EXECUTE)   begin pc_write_en_out=1; pc_src_sel_out=`PC_SRC_IMM; end
+                    
+                    // Note: these signals are asserted during mix of states
+                    `OP_SHL: if(current_state==S_EXECUTE) begin
+                                 alu_src_b_sel_out=`ALU_B_SRC_IMM;        // select operand from BRAM
+                             end
+                             else if(current_state==S_WRITEBACK) begin 
+                                 flags_write_en_out=1'b1;                  // capture flags
+                                 reg_write_en_out=1'b1;                    // write result back to register file
+                                 alu_src_b_sel_out=`ALU_B_SRC_IMM;         // select operand from BRAM
+                                 alu_op_out=`ALU_SHL;                      // select shift left function in ALU
+                              end
+                    `OP_SHR: if(current_state==S_EXECUTE) begin
+                                 alu_src_b_sel_out=`ALU_B_SRC_IMM;         // select operand from BRAM
+                             end
+                             else if(current_state==S_WRITEBACK) begin 
+                                 flags_write_en_out=1'b1;                  // capture flags
+                                 reg_write_en_out=1'b1;                    // write result back to register file
+                                 alu_src_b_sel_out=`ALU_B_SRC_IMM;         // select operand from BRAM
+                                 alu_op_out=`ALU_SHR;                      // select shift right function in ALU
+                              end
+
+                    `OP_JE,`OP_JNE,`OP_JS,`OP_JNS,`OP_JC,`OP_JNC,`OP_JO,`OP_JNO,`OP_JMPZ,`OP_JMPN: 
+                        if(current_state==S_EXECUTE && branch_condition_met) begin 
+                            pc_write_en_out=1'b1; 
+                            pc_src_sel_out=`PC_SRC_IMM; 
+                        end
+                    
+                    `OP_STORE: if(current_state==S_EXECUTE)   begin
+                                   // nothing to do
+                               end
+                               else if(current_state==S_MEM_ACCESS) begin 
+                                   dmem_write_en_out=1'b1; 
+                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_IMM; 
+                               end 
+
+                    // During CALL instruction, we have to write the return address to the stack.
+                    `OP_CALL: if(current_state==S_EXECUTE)   begin
+                                   pc_write_en_out=1'b1; 
+                                   pc_src_sel_out=`PC_SRC_IMM; 
+                                   // rtn addr
+                                   dmem_data_sel_out = `DMEM_DATA_SRC_PC;   // for rtn addr
+                                   dmem_write_en_out=1'b1; 
+                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
+                               end
+                               else if(current_state==S_MEM_ACCESS) begin  
+                                   pc_src_sel_out=`PC_SRC_PC_CURRENT;       // don't increment PC
+                                   pc_write_en_out=1'b1;
+                                   ir_opcode_load_en = 1'b1;                // load new opcode
+                                   sp_op_dec_out=1'b1;
+                               end               
+                    
+                    `OP_LOADM: if(current_state==S_EXECUTE)   begin
+                                   // nothing to do
+                               end
+                               else if(current_state==S_MEM_ACCESS) begin  
+                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_IMM; 
+                               end
+                               else if(current_state==S_WRITEBACK) begin 
+                                   reg_write_en_out=1'b1; 
+                                   reg_write_data_sel_out=`WB_SRC_MEM; 
+                               end
+
+                    `OP_PUSH: if(current_state==S_EXECUTE)   begin 
+                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;  
+                              end
+                              else if(current_state==S_MEM_ACCESS) begin 
+                                  sp_op_dec_out=1'b1;
+                                  dmem_write_en_out=1'b1; 
+                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
+                              end
+                              
+                    `OP_POP:  if(current_state==S_EXECUTE)   begin 
+                                  sp_op_inc_out=1'b1; 
+                              end
+                              else if(current_state==S_MEM_ACCESS) begin 
+                                  dmem_read_en_out=1'b1; 
+                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP; 
+                              end
+                              else if(current_state==S_WRITEBACK) begin 
+                                  reg_write_en_out=1'b1; 
+                                  reg_write_data_sel_out=`WB_SRC_MEM; 
+                              end
+
+
+                    `OP_RET:  if(current_state==S_EXECUTE) begin 
+                                  sp_op_inc_out=1'b1; 
+                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP; 
+                                  pc_src_sel_out=`PC_SRC_MEM; 
+                              end
+                              else if(current_state==S_MEM_ACCESS) begin 
+                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
+                                  pc_src_sel_out=`PC_SRC_MEM; 
+                              end
+                              else if(current_state==S_PCWREN) begin 
+                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
+                                  pc_src_sel_out=`PC_SRC_MEM;
+                                  pc_write_en_out=1'b1; 
+                              end
+                              else if(current_state==S_RTN_ADDR) begin
+                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
+                                  pc_src_sel_out=`PC_SRC_MEM;  
+                              end
+
                     // Add all other instructions... this is a simplified example.
                 endcase
             end
