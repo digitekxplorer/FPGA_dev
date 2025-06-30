@@ -62,7 +62,9 @@ module cpu_tl (
     logic [1:0] alu_src_b_sel_to_dp;
     logic dmem_read_en_to_dp;
     logic dmem_write_en_to_dp;
+    logic dmem_write_en;
     logic [1:0] dmem_addr_sel_to_dp;
+    logic       dmem_data_sel_to_dp;
     logic sp_op_inc_to_dp;
     logic sp_op_dec_to_dp;
     
@@ -102,6 +104,7 @@ module cpu_tl (
         .dmem_read_en_from_cu(dmem_read_en_to_dp),
         .dmem_write_en_from_cu(dmem_write_en_to_dp),
         .dmem_addr_sel_from_cu(dmem_addr_sel_to_dp),
+        .dmem_data_sel_from_cu(dmem_data_sel_to_dp),
         .sp_op_inc_from_cu(sp_op_inc_to_dp),
         .sp_op_dec_from_cu(sp_op_dec_to_dp),
         
@@ -154,6 +157,7 @@ module cpu_tl (
         .dmem_read_en_out(dmem_read_en_to_dp),
         .dmem_write_en_out(dmem_write_en_to_dp),
         .dmem_addr_sel_out(dmem_addr_sel_to_dp),
+        .dmem_data_sel_out(dmem_data_sel_to_dp),
         .sp_op_inc_out(sp_op_inc_to_dp),
         .sp_op_dec_out(sp_op_dec_to_dp),
         
@@ -179,24 +183,26 @@ module cpu_tl (
     end
 
     // Behavioral Instruction and Data Memory
-    logic [7:0] instruction_memory [0:8191];
-    logic [`DATA_WIDTH-1:0] data_memory [0: (`DATA_MEMORY_WORDS/2)-1]; // Corrected indexing for word array
+    logic [7:0] instruction_memory [0:`DATA_MEMORY_BYTES-1];
+    logic [`DATA_WIDTH-1:0] data_memory [0: (`DATA_MEMORY_BYTES/2)-1]; // Corrected indexing for word array
 
     initial $readmemh(`IMEM_HEX_FILE, instruction_memory);
 
+    // Read from Instruction and Data memory.
     // One clock latency to match BRAM behavior
     always_ff @(posedge clk) begin
         imem_rdata_i  <= instruction_memory[imem_addr_o];    // no addr to dout dly
+        dmem_rdata_i = data_memory[dmem_addr_o >> 1];
     end
     
-    assign dmem_rdata_i = data_memory[dmem_addr_o >> 1];
-
+    // Write to Data memory
     always_ff @(posedge clk) begin
         if (dmem_we_o) begin
             data_memory[dmem_addr_o >> 1] <= dmem_wdata_o;
+//            instruction_memory[dmem_addr_o >> 1] <= dmem_wdata_o;   // imem is a ROM, don't write to imem
         end
     end
-
+    
 `else
     // --- FOR SYNTHESIS: Use the real BRAM IP Core ---
     initial begin
