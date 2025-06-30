@@ -37,31 +37,25 @@
 `define OP_STORFR   8'h05 // STORFR Rt, Rbase, #off16 (5 bytes)
 `define OP_LOADI    8'h06 // LOADI Rd, Rs_addr (3 bytes)
 `define OP_STORI    8'h07 // STORI Rt_val, Rs_addr (3 bytes)
-
 `define OP_ADD      8'h10 // ADD Rd, Rs (3 bytes)
 `define OP_SUB      8'h11 // SUB Rd, Rs (3 bytes)
 `define OP_MUL      8'h12 // MUL Rd, Rs (3 bytes)
 `define OP_INC      8'h13 // INC Rd (2 bytes)
 `define OP_DEC      8'h14 // DEC Rd (2 bytes)
-
 `define OP_AND      8'h20 // AND Rd, Rs (3 bytes)
 `define OP_OR       8'h21 // OR Rd, Rs (3 bytes)
 `define OP_XOR      8'h22 // XOR Rd, Rs (3 bytes)
 `define OP_NOT      8'h23 // NOT Rd (2 bytes)
 `define OP_SHL      8'h24 // SHL Rd, #Imm8 (3 bytes)
 `define OP_SHR      8'h25 // SHR Rd, #Imm8 (3 bytes)
-
 `define OP_L_AND    8'h26 // LAND Rd, Rs1, Rs2 (4 bytes)
 `define OP_L_OR     8'h27 // LOR Rd, Rs1, Rs2 (4 bytes)
 `define OP_L_NOT    8'h28 // LNOT Rd, Rs (3 bytes)
-
 `define OP_INP      8'h30 // INP Rd (2 bytes)
 `define OP_OUT      8'h31 // OUT Rs (2 bytes)
 `define OP_INM      8'h32 // INM Rd, Addr16 (4 bytes)
 `define OP_OUTM     8'h33 // OUTM Rs, Addr16 (4 bytes)
-
 `define OP_CMP      8'h40 // CMP R1, R2 (3 bytes)
-
 `define OP_JMP      8'h50 // JMP Addr16 (3 bytes)
 `define OP_JMPZ     8'h51 // JMPZ Rs, Addr16 (4 bytes)
 `define OP_JMPN     8'h52 // JMPN Rs, Addr16 (4 bytes)
@@ -73,17 +67,13 @@
 `define OP_JNC      8'h58 // JNC Addr16 (3 bytes)
 `define OP_JO       8'h59 // JO Addr16 (3 bytes)
 `define OP_JNO      8'h5A // JNO Addr16 (3 bytes)
-
 `define OP_PUSH     8'h60 // PUSH Rs (2 bytes)
 `define OP_POP      8'h61 // POP Rd (2 bytes)
-
 `define OP_CALL     8'h70 // CALL Addr16 (3 bytes)
 `define OP_RET      8'h71 // RET (1 byte)
-
 `define OP_MOV      8'h80 // MOV Rd, Rs (3 bytes)
 `define OP_MOVFRSP  8'h81 // MOVFRSP Rd (2 bytes)
 `define OP_MOVTOSP  8'h82 // MOVTOSP Rs (2 bytes)
-
 `define OP_HALT     8'hFF // HALT (1 byte)
 
 //================================================================
@@ -91,7 +81,7 @@
 //================================================================
 `define DATA_WIDTH 16
 `define ADDR_WIDTH 14
-`define DATA_MEMORY_WORDS 8192 // Max capacity for 16-bit addressing. Defines SP initial value.
+`define DATA_MEMORY_BYTES 8192 // Max capacity for 16-bit addressing. Defines SP initial value.
 
 //================================================================
 // Register Definitions
@@ -160,5 +150,9 @@
 `define DMEM_ADDR_SRC_IMM   2'b00 // Direct address from instruction
 `define DMEM_ADDR_SRC_SP    2'b01 // From Stack Pointer
 `define DMEM_ADDR_SRC_ALU   2'b10 // From ALU result (LOADI, STORI)
+
+// Data Memory Data Source (for dmem_rtn_addr_sel)
+`define DMEM_DATA_SRC_RF    1'b0 // From Register File
+`define DMEM_DATA_SRC_PC    1'b1 // From PC
 
 `endif // DEFINES_SVH
