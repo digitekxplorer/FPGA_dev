@@ -34,11 +34,11 @@ module datapath (
     // Control Signals from Control Unit
     input  logic        pc_write_en_from_cu,
     input  logic [2:0]  pc_src_sel_from_cu,
-    input  logic        reg_write_en_from_cu,
-    input  logic [`REG_ADDR_WIDTH-1:0] reg_dest_addr_from_cu,
-    input  logic [`REG_ADDR_WIDTH-1:0] reg_src1_addr_from_cu,
-    input  logic [`REG_ADDR_WIDTH-1:0] reg_src2_addr_from_cu,
-    input  logic [1:0]  reg_write_data_sel_from_cu,
+    input  logic        rf_write_en_from_cu,
+    input  logic [`REG_ADDR_WIDTH-1:0] rf_dest_addr_from_cu,
+    input  logic [`REG_ADDR_WIDTH-1:0] rf_src1_addr_from_cu,
+    input  logic [`REG_ADDR_WIDTH-1:0] rf_src2_addr_from_cu,
+    input  logic [1:0]  rf_write_data_sel_from_cu,
     input  logic        flags_write_en_from_cu,
     input  logic [`DATA_WIDTH-1:0] imm_val_from_cu, // Assembled immediate from CU
     input  logic [3:0]  alu_op_from_cu,
@@ -47,7 +47,7 @@ module datapath (
     input  logic        dmem_read_en_from_cu,
     input  logic        dmem_write_en_from_cu,
     input  logic [1:0]  dmem_addr_sel_from_cu,
-    input  logic        dmem_data_sel_from_cu,
+    input  logic [1:0]  dmem_data_sel_from_cu,
     input  logic        sp_op_inc_from_cu,
     input  logic        sp_op_dec_from_cu,
 
@@ -112,13 +112,13 @@ logic [`ADDR_WIDTH-1:0] sp_reg;
     //================================================================
 
     // GPR Asynchronous Read
-    assign rf_rdata1 = (reg_src1_addr_from_cu < `NUM_GP_REGS) ? register_file[reg_src1_addr_from_cu] : 16'b0;
-    assign rf_rdata2 = (reg_src2_addr_from_cu < `NUM_GP_REGS) ? register_file[reg_src2_addr_from_cu] : 16'b0;
+    assign rf_rdata1 = (rf_src1_addr_from_cu < `NUM_GP_REGS) ? register_file[rf_src1_addr_from_cu] : 16'b0;
+    assign rf_rdata2 = (rf_src2_addr_from_cu < `NUM_GP_REGS) ? register_file[rf_src2_addr_from_cu] : 16'b0;
 
     // GPR Synchronous Write
     always_ff @(posedge clk) begin
-        if (reg_write_en_from_cu && reg_dest_addr_from_cu < `NUM_GP_REGS) begin
-            register_file[reg_dest_addr_from_cu] <= rf_wdata_final;
+        if (rf_write_en_from_cu && rf_dest_addr_from_cu < `NUM_GP_REGS) begin
+            register_file[rf_dest_addr_from_cu] <= rf_wdata_final;
         end
     end
 
@@ -131,7 +131,7 @@ logic [`ADDR_WIDTH-1:0] sp_reg;
             sp_reg <= sp_reg + 2; // Word-aligned stack
         else if (sp_op_dec_from_cu) 
             sp_reg <= sp_reg - 2; // Word-aligned stack
-        else if (reg_write_en_from_cu && reg_dest_addr_from_cu == `SP_REG_ADDR) // For MOVTOSP
+        else if (rf_write_en_from_cu && rf_dest_addr_from_cu == `SP_REG_ADDR) // For MOVTOSP
             sp_reg <= rf_wdata_final;
     end
     
@@ -187,7 +187,7 @@ logic [`ADDR_WIDTH-1:0] sp_reg;
     //================================================================
     // Write-back data selection for Register File
     always_comb begin
-        case (reg_write_data_sel_from_cu)
+        case (rf_write_data_sel_from_cu)
             `WB_SRC_ALU:    rf_wdata_final = alu_result_internal;  // 00
             `WB_SRC_MEM:    rf_wdata_final = dmem_rdata_in;        // 01
             `WB_SRC_SP:     rf_wdata_final = sp_reg; // For MOVFRSP   10
@@ -210,12 +210,15 @@ logic [`ADDR_WIDTH-1:0] sp_reg;
     // During CALL instruction, we have to write the return address to the stack.
     always_comb begin
         case (dmem_data_sel_from_cu)
-            `DMEM_DATA_SRC_RF:   dmem_wdata_out = rf_rdata1;   // 0
-            `DMEM_DATA_SRC_PC:   dmem_wdata_out = pc_reg;      // 1 ; for CALL, rtn addr is PC, addr of next instr
+            `DMEM_DATA_SRC_RF1:  dmem_wdata_out = rf_rdata1;   // 00
+            `DMEM_DATA_SRC_RF2:  dmem_wdata_out = rf_rdata2;   // 01
+            `DMEM_DATA_SRC_PC:   dmem_wdata_out = pc_reg;      // 10 ; for CALL, rtn addr is PC, addr of next instr
             default:             dmem_wdata_out = rf_rdata1;
         endcase
     end
-    assign dmem_wdata_out = rf_rdata1;
+	
+	// Gemini found the error below. A Mux is already used to assign dmem_wdata_out.
+    // assign dmem_wdata_out = rf_rdata1;
 
     // GPIO Output
     assign gpio_out_data_bus = rf_rdata1;
