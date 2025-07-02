@@ -152,7 +152,8 @@
 `define DMEM_ADDR_SRC_ALU   2'b10 // From ALU result (LOADI, STORI)
 
 // Data Memory Data Source (for dmem_rtn_addr_sel)
-`define DMEM_DATA_SRC_RF    1'b0 // From Register File
-`define DMEM_DATA_SRC_PC    1'b1 // From PC
+`define DMEM_DATA_SRC_RF1   2'b00 // From Register File, rf_src1
+`define DMEM_DATA_SRC_RF2   2'b01 // From Register File, rf_src2
+`define DMEM_DATA_SRC_PC    2'b10 // From PC
 
 `endif // DEFINES_SVH
