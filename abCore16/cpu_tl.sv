@@ -50,11 +50,11 @@ module cpu_tl (
     // --- From Control Unit TO Datapath ---
     logic pc_write_en_to_dp;
     logic [2:0] pc_src_sel_to_dp;
-    logic reg_write_en_to_dp;
-    logic [`REG_ADDR_WIDTH-1:0] reg_dest_addr_to_dp;
-    logic [`REG_ADDR_WIDTH-1:0] reg_src1_addr_to_dp;
-    logic [`REG_ADDR_WIDTH-1:0] reg_src2_addr_to_dp;
-    logic [1:0] reg_write_data_sel_to_dp;
+    logic rf_write_en_to_dp;
+    logic [`REG_ADDR_WIDTH-1:0] rf_dest_addr_to_dp;
+    logic [`REG_ADDR_WIDTH-1:0] rf_src1_addr_to_dp;
+    logic [`REG_ADDR_WIDTH-1:0] rf_src2_addr_to_dp;
+    logic [1:0] rf_write_data_sel_to_dp;
     logic flags_write_en_to_dp;
     logic [`DATA_WIDTH-1:0] imm_val_to_dp;
     logic [3:0] alu_op_to_dp;
@@ -64,7 +64,7 @@ module cpu_tl (
     logic dmem_write_en_to_dp;
     logic dmem_write_en;
     logic [1:0] dmem_addr_sel_to_dp;
-    logic       dmem_data_sel_to_dp;
+    logic [1:0] dmem_data_sel_to_dp;
     logic sp_op_inc_to_dp;
     logic sp_op_dec_to_dp;
     
@@ -91,11 +91,11 @@ module cpu_tl (
         // Control signals from CU
         .pc_write_en_from_cu(pc_write_en_to_dp),
         .pc_src_sel_from_cu(pc_src_sel_to_dp),
-        .reg_write_en_from_cu(reg_write_en_to_dp),
-        .reg_dest_addr_from_cu(reg_dest_addr_to_dp),
-        .reg_src1_addr_from_cu(reg_src1_addr_to_dp),
-        .reg_src2_addr_from_cu(reg_src2_addr_to_dp),
-        .reg_write_data_sel_from_cu(reg_write_data_sel_to_dp),
+        .rf_write_en_from_cu(rf_write_en_to_dp),
+        .rf_dest_addr_from_cu(rf_dest_addr_to_dp),
+        .rf_src1_addr_from_cu(rf_src1_addr_to_dp),
+        .rf_src2_addr_from_cu(rf_src2_addr_to_dp),
+        .rf_write_data_sel_from_cu(rf_write_data_sel_to_dp),
         .flags_write_en_from_cu(flags_write_en_to_dp),
         .imm_val_from_cu(imm_val_to_dp),
         .alu_op_from_cu(alu_op_to_dp),
@@ -144,11 +144,11 @@ module cpu_tl (
         // Outputs to DP
         .pc_write_en_out(pc_write_en_to_dp),
         .pc_src_sel_out(pc_src_sel_to_dp),
-        .reg_write_en_out(reg_write_en_to_dp),
-        .reg_dest_addr_out(reg_dest_addr_to_dp),
-        .reg_src1_addr_out(reg_src1_addr_to_dp),
-        .reg_src2_addr_out(reg_src2_addr_to_dp),
-        .reg_write_data_sel_out(reg_write_data_sel_to_dp),
+        .rf_write_en_out(rf_write_en_to_dp),
+        .rf_dest_addr_out(rf_dest_addr_to_dp),
+        .rf_src1_addr_out(rf_src1_addr_to_dp),
+        .rf_src2_addr_out(rf_src2_addr_to_dp),
+        .rf_write_data_sel_out(rf_write_data_sel_to_dp),
         .flags_write_en_out(flags_write_en_to_dp),           // ab
         .imm_val_to_dp_out(imm_val_to_dp),
         .alu_op_out(alu_op_to_dp),
@@ -174,8 +174,11 @@ module cpu_tl (
 //================================================================
 `ifdef SIMULATION
     // --- FOR SIMULATION: Use a fast, behavioral memory model ---
+    // Remember: Must add new hex files to abCore16 project as a Memory File!!
 //    `define IMEM_HEX_FILE "myProg_add.hex" // << CHANGE THIS TO YOUR TEST PROGRAM
-    `define IMEM_HEX_FILE "myProg_generic.hex" // << CHANGE THIS TO YOUR TEST PROGRAM
+//    `define IMEM_HEX_FILE "myProg_generic.hex" // Comprehensive Test (.ab)
+//    `define IMEM_HEX_FILE "test_program_short.hex"  // C-like with main() (.ssl)
+    `define IMEM_HEX_FILE "test_func.hex"  // Test STORFR, LOADFR (.sal)
     
     initial begin
         $display("INFO: Compiling with SIMULATION behavioral memory model.");
