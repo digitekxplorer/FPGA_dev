@@ -201,7 +201,8 @@ module control_unit (
                 case (ir_opcode_reg)
                     `OP_LOADM, `OP_LOADI, `OP_POP, `OP_INM: next_state = S_MEM_ACCESS;
                     `OP_STORE, `OP_STORI, `OP_PUSH, `OP_CALL, `OP_OUTM: next_state = S_MEM_ACCESS;
-                    `OP_RET, `OP_STORFR, `OP_LOADFR: next_state = S_MEM_ACCESS;
+                    `OP_RET, `OP_STORFR: next_state = S_MEM_ACCESS;
+                    `OP_LOADFR, `OP_MOVTOSP: next_state = S_WRITEBACK;
                     `OP_L_AND, `OP_L_OR, `OP_L_NOT: next_state = S_WRITEBACK;
                     `OP_LOAD, `OP_ADD, `OP_SUB, `OP_CMP, `OP_MUL, `OP_INC, `OP_DEC, `OP_AND, `OP_OR, `OP_XOR, `OP_NOT,
                     `OP_SHL, `OP_SHR, `OP_MOV, `OP_INP, `OP_MOVFRSP: next_state = S_WRITEBACK;
@@ -468,18 +469,31 @@ module control_unit (
                               else if(current_state==S_RTN_ADDR) begin
                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
                                   pc_src_sel_out=`PC_SRC_MEM;  
-                              end
-                    
+                              end                 
+
                     // 4 operand instructions (or 5 total bytes)
                     `OP_LOADFR: 
                         if(current_state==S_EXECUTE) begin 
-
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
+                            alu_op_out=`ALU_ADD;                   // [R_base + IMM]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
+                            alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
+                            rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+                        end
+                        else if(current_state==S_WRITEBACK) begin 
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
+                            alu_op_out=`ALU_ADD;                   // [R_base + IMM]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
+                            alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
+                            rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+                            // write to Register File
+                            rf_write_en_out=1; 
                         end
                         
                     `OP_STORFR: 
                         if(current_state==S_EXECUTE) begin 
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
-                            alu_op_out=`ALU_ADD;                   // [R_base + IM8]
+                            alu_op_out=`ALU_ADD;                   // [R_base + IMM]
                             alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
                             alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
                             // data out to DMEM
@@ -487,7 +501,7 @@ module control_unit (
                         end
                         else if(current_state==S_MEM_ACCESS) begin 
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
-                            alu_op_out=`ALU_ADD;                   // [R_base + IM8]
+                            alu_op_out=`ALU_ADD;                   // [R_base + IMM]
                             alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
                             alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
                             // data out to DMEM
