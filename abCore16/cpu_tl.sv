@@ -25,6 +25,13 @@
 
 `define SIMULATION
 
+// --- FOR SIMULATION: Use a fast, behavioral memory model ---
+// Remember: Must add new hex files to abCore16 project as a Memory File!!
+// `define IMEM_HEX_FILE "myProg_add.hex" // << CHANGE THIS TO YOUR TEST PROGRAM
+// `define IMEM_HEX_FILE "myProg_generic.hex" // Comprehensive Test (.ab)
+`define IMEM_HEX_FILE "test_program_short.hex"  // C-like with main() (.ssl)
+// `define IMEM_HEX_FILE "test_func.hex"  // Test STORFR, LOADFR (.sal)
+
 module cpu_tl (
     input  logic clk,
     input  logic rst_n,
@@ -178,7 +185,7 @@ module cpu_tl (
 //    `define IMEM_HEX_FILE "myProg_add.hex" // << CHANGE THIS TO YOUR TEST PROGRAM
 //    `define IMEM_HEX_FILE "myProg_generic.hex" // Comprehensive Test (.ab)
 //    `define IMEM_HEX_FILE "test_program_short.hex"  // C-like with main() (.ssl)
-    `define IMEM_HEX_FILE "test_func.hex"  // Test STORFR, LOADFR (.sal)
+//    `define IMEM_HEX_FILE "test_func.hex"  // Test STORFR, LOADFR (.sal)
     
     initial begin
         $display("INFO: Compiling with SIMULATION behavioral memory model.");
