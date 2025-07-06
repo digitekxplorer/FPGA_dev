@@ -133,12 +133,12 @@
 `define PC_SRC_ALU          3'b100 // Value from ALU result (for calculated jumps - future)
 
 // ALU Operand A Source Selection (for alu_src_a_sel_out)
-`define ALU_A_SRC_REG       2'b00
-`define ALU_A_SRC_PC        2'b01
+`define ALU_A_SRC_REG       1'b0
+`define ALU_A_SRC_PC        1'b1
 
 // ALU Operand B Source Selection (for alu_src_b_sel_out)
-`define ALU_B_SRC_REG       2'b00
-`define ALU_B_SRC_IMM       2'b01
+`define ALU_B_SRC_REG       1'b0
+`define ALU_B_SRC_IMM       1'b1
 
 // Register File Writeback Data Source (for reg_write_data_sel_out)
 `define WB_SRC_ALU          2'b00 // From ALU result
