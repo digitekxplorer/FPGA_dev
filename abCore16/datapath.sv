@@ -42,9 +42,8 @@ module datapath (
     input  logic        flags_write_en_from_cu,
     input  logic [`DATA_WIDTH-1:0] imm_val_from_cu, // Assembled immediate from CU
     input  logic [3:0]  alu_op_from_cu,
-    input  logic [1:0]  alu_src_a_sel_from_cu,
-    input  logic [1:0]  alu_src_b_sel_from_cu,
-    input  logic        dmem_read_en_from_cu,
+    input  logic        alu_src_a_sel_from_cu,
+    input  logic        alu_src_b_sel_from_cu,
     input  logic        dmem_write_en_from_cu,
     input  logic [1:0]  dmem_addr_sel_from_cu,
     input  logic [1:0]  dmem_data_sel_from_cu,
@@ -116,17 +115,22 @@ logic [`ADDR_WIDTH-1:0] sp_reg;
     assign rf_rdata2 = (rf_src2_addr_from_cu < `NUM_GP_REGS) ? register_file[rf_src2_addr_from_cu] : 16'b0;
 
     // GPR Synchronous Write
-    always_ff @(posedge clk) begin
-        if (rf_write_en_from_cu && rf_dest_addr_from_cu < `NUM_GP_REGS) begin
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int i = 0; i < `NUM_GP_REGS; i++) begin
+                register_file[i] <= '0; 
+            end
+        end
+        else if (rf_write_en_from_cu && rf_dest_addr_from_cu < `NUM_GP_REGS) begin
             register_file[rf_dest_addr_from_cu] <= rf_wdata_final;
         end
     end
 
-    // SP Logic
+    // Stack Pointer Logic
     localparam STACK_INIT_VAL_DP = `DATA_MEMORY_BYTES/2;    // 4096 x 16 = 8192 bytes
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) 
-            sp_reg <= STACK_INIT_VAL_DP;
+            sp_reg <= STACK_INIT_VAL_DP - 2;  // same as decrementing first before using the stack
         else if (sp_op_inc_from_cu) 
             sp_reg <= sp_reg + 2; // Word-aligned stack
         else if (sp_op_dec_from_cu) 
