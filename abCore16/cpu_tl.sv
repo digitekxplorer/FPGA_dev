@@ -23,21 +23,23 @@
 
 `include "defines.svh"
 
-`define SIMULATION
+// For Synthesis, comment out both defines
+`define MEMORYMODELSIM    // use hex file
+`define SIMSPEEDUPCLK     // use Testbench 12MHz clock
 
 // --- FOR SIMULATION: Use a fast, behavioral memory model ---
 // Remember: Must add new hex files to abCore16 project as a Memory File!!
 // `define IMEM_HEX_FILE "myProg_add.hex" // << CHANGE THIS TO YOUR TEST PROGRAM
-// `define IMEM_HEX_FILE "myProg_generic.hex" // Comprehensive Test (.ab)
-`define IMEM_HEX_FILE "test_program_short.hex"  // C-like with main() (.ssl)
+ `define IMEM_HEX_FILE "myProg_generic.hex" // Comprehensive Test (.ab)
+//`define IMEM_HEX_FILE "test_program_short.hex"  // C-like with main() (.ssl)
 // `define IMEM_HEX_FILE "test_func.hex"  // Test STORFR, LOADFR (.sal)
 
 module cpu_tl (
-    input  logic clk,
-    input  logic rst_n,
+    input  logic clk_12MHz,
+    input  logic rst_in,
 
     // GPIO Interface
-    input  logic [`DATA_WIDTH-1:0] gpio_in_i,
+//    input  logic [`DATA_WIDTH-1:0] gpio_in_i,  // for now reduce pin count
     output logic [`DATA_WIDTH-1:0] gpio_out_o,
     output logic                   gpio_out_we_o,
     
@@ -65,9 +67,8 @@ module cpu_tl (
     logic flags_write_en_to_dp;
     logic [`DATA_WIDTH-1:0] imm_val_to_dp;
     logic [3:0] alu_op_to_dp;
-    logic [1:0] alu_src_a_sel_to_dp;
-    logic [1:0] alu_src_b_sel_to_dp;
-    logic dmem_read_en_to_dp;
+    logic       alu_src_a_sel_to_dp;
+    logic       alu_src_b_sel_to_dp;
     logic dmem_write_en_to_dp;
     logic dmem_write_en;
     logic [1:0] dmem_addr_sel_to_dp;
@@ -83,8 +84,40 @@ module cpu_tl (
     logic [`ADDR_WIDTH-1:0] dmem_addr_o;
     logic [`DATA_WIDTH-1:0] dmem_wdata_o;
     logic [`DATA_WIDTH-1:0] dmem_rdata_i;
+    
+    // To rduce pin count for development board assign gpio_in_i here.
+    logic [`DATA_WIDTH-1:0] gpio_in_i;
+    assign gpio_in_i = gpio_out_o;
+    
+    
+//================================================================
+// Conditional Clock Module Instantiation
+//================================================================
+// To speedup simulation, use the 12MHz clock directly from the testbench
+// instead of using the MMCM clock module that takes tens of uSeconds to
+// lock.
+logic rst_n;
+logic locked;
 
+`ifdef SIMSPEEDUPCLK
+// --- FOR SIMULATION: Use the Testbench 12MHz clock ---
+assign clk = clk_12MHz;
+assign rst_n = !rst_in;
+assign locked = 1'b1;
 
+`else
+// --- FOR SYNTHESIS: Use the real MMCM IP Core ---
+clk_wiz_0 abCore16_clk (
+    // Clock and pushbutton reset
+    .clk_in1   (clk_12MHz ),  // input clk_in1
+    .reset     (rst_in),      // input reset; pushbutton
+    // outputs
+    .clk_out1  (clk),         // 48 MHz
+    .locked    (locked)       // clk locked
+);
+
+assign rst_n = locked;
+`endif
     //================================================================
     // Module Instantiations
     //================================================================
@@ -108,7 +141,6 @@ module cpu_tl (
         .alu_op_from_cu(alu_op_to_dp),
         .alu_src_a_sel_from_cu(alu_src_a_sel_to_dp),
         .alu_src_b_sel_from_cu(alu_src_b_sel_to_dp),
-        .dmem_read_en_from_cu(dmem_read_en_to_dp),
         .dmem_write_en_from_cu(dmem_write_en_to_dp),
         .dmem_addr_sel_from_cu(dmem_addr_sel_to_dp),
         .dmem_data_sel_from_cu(dmem_data_sel_to_dp),
@@ -161,7 +193,6 @@ module cpu_tl (
         .alu_op_out(alu_op_to_dp),
         .alu_src_a_sel_out(alu_src_a_sel_to_dp),
         .alu_src_b_sel_out(alu_src_b_sel_to_dp),
-        .dmem_read_en_out(dmem_read_en_to_dp),
         .dmem_write_en_out(dmem_write_en_to_dp),
         .dmem_addr_sel_out(dmem_addr_sel_to_dp),
         .dmem_data_sel_out(dmem_data_sel_to_dp),
@@ -179,13 +210,7 @@ module cpu_tl (
 //================================================================
 // Conditional Memory Instantiation (`generate` block)
 //================================================================
-`ifdef SIMULATION
-    // --- FOR SIMULATION: Use a fast, behavioral memory model ---
-    // Remember: Must add new hex files to abCore16 project as a Memory File!!
-//    `define IMEM_HEX_FILE "myProg_add.hex" // << CHANGE THIS TO YOUR TEST PROGRAM
-//    `define IMEM_HEX_FILE "myProg_generic.hex" // Comprehensive Test (.ab)
-//    `define IMEM_HEX_FILE "test_program_short.hex"  // C-like with main() (.ssl)
-//    `define IMEM_HEX_FILE "test_func.hex"  // Test STORFR, LOADFR (.sal)
+`ifdef MEMORYMODELSIM
     
     initial begin
         $display("INFO: Compiling with SIMULATION behavioral memory model.");
@@ -234,7 +259,7 @@ module cpu_tl (
         .clka   ( clk ),
         .ena    ( 1'b1 ),
         .wea    ( 1'b0 ),       // ROM
-        .addra  ( imem_addr_o ),
+        .addra  ( imem_addr_o[12:0] ),
         .dina   ( 9'b0 ),       // ROM
         .douta  ( imem_rdata_i ),   // 8-bits
         // Data Memory Interface
