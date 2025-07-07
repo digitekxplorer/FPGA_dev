@@ -28,9 +28,12 @@
 `define SIMSPEEDUPCLK     // use Testbench 12MHz clock
 
 // --- FOR SIMULATION: Use a fast, behavioral memory model ---
-// Remember: Must add new hex files to abCore16 project as a Memory File!!
+// Remember: Must add new coe and hex files to abCore16 project as Coefficient 
+// and Memory Files!!
 // `define IMEM_HEX_FILE "myProg_add.hex" // << CHANGE THIS TO YOUR TEST PROGRAM
- `define IMEM_HEX_FILE "myProg_generic.hex" // Comprehensive Test (.ab)
+// `define IMEM_HEX_FILE "myProg_generic.hex" // Comprehensive Test (.ab)
+// `define IMEM_HEX_FILE "myProg_loadi.hex" // Comprehensive Test (.ab)
+`define IMEM_HEX_FILE "test_arrays.hex"  // C-like with main() (.ssl)
 //`define IMEM_HEX_FILE "test_program_short.hex"  // C-like with main() (.ssl)
 // `define IMEM_HEX_FILE "test_func.hex"  // Test STORFR, LOADFR (.sal)
 
@@ -41,8 +44,7 @@ module cpu_tl (
     // GPIO Interface
 //    input  logic [`DATA_WIDTH-1:0] gpio_in_i,  // for now reduce pin count
     output logic [`DATA_WIDTH-1:0] gpio_out_o,
-    output logic                   gpio_out_we_o,
-    
+    output logic                   gpio_out_we_o,   
     // CPU halt flag
     output logic                   halted_o
 );
