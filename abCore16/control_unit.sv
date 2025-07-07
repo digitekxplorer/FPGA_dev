@@ -201,7 +201,9 @@ module control_unit (
                     `OP_LOADM, `OP_POP, `OP_INM: next_state = S_MEM_ACCESS;
                     `OP_STORE, `OP_STORI, `OP_PUSH, `OP_CALL, `OP_OUTM: next_state = S_MEM_ACCESS;
                     `OP_RET, `OP_STORFR: next_state = S_MEM_ACCESS;
-                    `OP_LOADFR, `OP_LOADI: next_state = S_WRITEBACK;
+                    `OP_LOADI: next_state = S_MEM_ACCESS;
+//                    `OP_LOADFR, `OP_LOADI: next_state = S_WRITEBACK;
+                    `OP_LOADFR: next_state = S_WRITEBACK;
                     `OP_L_AND, `OP_L_OR, `OP_L_NOT: next_state = S_WRITEBACK;
                     `OP_LOAD, `OP_ADD, `OP_SUB, `OP_CMP, `OP_MUL, `OP_INC, `OP_DEC, `OP_AND, `OP_OR, `OP_XOR, `OP_NOT,
                     `OP_SHL, `OP_SHR, `OP_MOV, `OP_INP, `OP_MOVFRSP: next_state = S_WRITEBACK;
@@ -510,6 +512,12 @@ module control_unit (
                     // Rd = Mem[Rs_addr]
                     `OP_LOADI: 
                         if(current_state==S_EXECUTE) begin 
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
+                            alu_op_out=`ALU_PASS_A;                // [Rs_addr]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs
+                            rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+                        end
+                        else if(current_state==S_MEM_ACCESS) begin  
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
                             alu_op_out=`ALU_PASS_A;                // [Rs_addr]
                             alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs
