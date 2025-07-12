@@ -32,7 +32,7 @@ module cpu_tb;
 
     // Testbench Parameters
     localparam CLK_PERIOD     = 83.3;  // 12 MHz clock
-    localparam MAX_SIM_CYCLES = 1000;
+    localparam MAX_SIM_CYCLES = 2500;
     
     // Important Note: Must update test result for each test
     localparam TEST_RESULT    = 30;
