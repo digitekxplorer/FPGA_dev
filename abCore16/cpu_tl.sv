@@ -30,12 +30,21 @@
 // --- FOR SIMULATION: Use a fast, behavioral memory model ---
 // Remember: Must add new coe and hex files to abCore16 project as Coefficient 
 // and Memory Files!!
+// .ab Programs
 // `define IMEM_HEX_FILE "myProg_add.hex" // << CHANGE THIS TO YOUR TEST PROGRAM
-// `define IMEM_HEX_FILE "myProg_generic.hex" // Comprehensive Test (.ab)
-// `define IMEM_HEX_FILE "myProg_loadi.hex" // Comprehensive Test (.ab)
-`define IMEM_HEX_FILE "test_arrays.hex"  // C-like with main() (.ssl)
-//`define IMEM_HEX_FILE "test_program_short.hex"  // C-like with main() (.ssl)
-// `define IMEM_HEX_FILE "test_func.hex"  // Test STORFR, LOADFR (.sal)
+//`define IMEM_HEX_FILE "myProg_generic.hex" // Comprehensive Test (.ab)
+//`define IMEM_HEX_FILE "myProg_loadi.hex" // Comprehensive Test (.ab)
+// SAL Programs
+//`define IMEM_HEX_FILE "test_func.hex"  // Test STORFR, LOADFR
+// SSL Programs: C-like with main()
+//`define IMEM_HEX_FILE "test_program_short.hex"  // several C-Like features
+//`define IMEM_HEX_FILE "test_arrays.hex"  // arrays
+//`define IMEM_HEX_FILE "test_forLp.hex"  // for Loop
+//`define IMEM_HEX_FILE "test_mmio.hex"  // memory-mapped I/O
+//`define IMEM_HEX_FILE "test_pointers.hex"  // C-like pointers
+//`define IMEM_HEX_FILE "test_postfix.hex"  // p++ and p--
+`define IMEM_HEX_FILE "test_new_features.hex"  // p++ and p--, else if, switch
+
 
 module cpu_tl (
     input  logic clk_12MHz,
