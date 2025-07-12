@@ -127,7 +127,8 @@ logic [`ADDR_WIDTH-1:0] sp_reg;
     end
 
     // Stack Pointer Logic
-    localparam STACK_INIT_VAL_DP = `DATA_MEMORY_BYTES/2;    // 4096 x 16 = 8192 bytes
+//    localparam STACK_INIT_VAL_DP = `DATA_MEMORY_BYTES/2;    // 4096 x 16 = 8192 bytes
+    localparam STACK_INIT_VAL_DP = `DATA_MEMORY_BYTES;    // 8192 bytes
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) 
             sp_reg <= STACK_INIT_VAL_DP - 2;  // same as decrementing first before using the stack
