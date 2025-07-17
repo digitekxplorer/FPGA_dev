@@ -24,8 +24,8 @@
 `include "defines.svh"
 
 // For Synthesis, comment out both defines
-`define MEMORYMODELSIM    // use hex file
-`define SIMSPEEDUPCLK     // use Testbench 12MHz clock
+//`define MEMORYMODELSIM    // use hex file
+//`define SIMSPEEDUPCLK     // use Testbench 12MHz clock
 
 // --- FOR SIMULATION: Use a fast, behavioral memory model ---
 // Remember: Must add new coe and hex files to abCore16 project as Coefficient 
@@ -43,7 +43,8 @@
 //`define IMEM_HEX_FILE "test_mmio.hex"  // memory-mapped I/O
 //`define IMEM_HEX_FILE "test_pointers.hex"  // C-like pointers
 //`define IMEM_HEX_FILE "test_postfix.hex"  // p++ and p--
-`define IMEM_HEX_FILE "test_new_features.hex"  // p++ and p--, else if, switch
+//`define IMEM_HEX_FILE "test_new_features.hex"  // p++ and p--, else if, switch
+`define IMEM_HEX_FILE "test_blink.hex"  // blink LED using SW counters
 
 
 module cpu_tl (
@@ -55,50 +56,26 @@ module cpu_tl (
     output logic [`DATA_WIDTH-1:0] gpio_out_o,
     output logic                   gpio_out_we_o,   
     // CPU halt flag
-    output logic                   halted_o
+    output logic                   halted_o,
+    output logic                   led2_o,
+    output logic                   led3_o
 );
 
-    //================================================================
-    // Internal Wires connecting Control Unit (CU) and Datapath (DP)
-    //================================================================
-
-    // --- From Datapath TO Control Unit ---
-    logic zf_from_dp, sf_from_dp, cf_from_dp, of_from_dp;
-    logic reg_is_zero_from_dp;
-    logic reg_is_neg_from_dp;
-
-    // --- From Control Unit TO Datapath ---
-    logic pc_write_en_to_dp;
-    logic [2:0] pc_src_sel_to_dp;
-    logic rf_write_en_to_dp;
-    logic [`REG_ADDR_WIDTH-1:0] rf_dest_addr_to_dp;
-    logic [`REG_ADDR_WIDTH-1:0] rf_src1_addr_to_dp;
-    logic [`REG_ADDR_WIDTH-1:0] rf_src2_addr_to_dp;
-    logic [1:0] rf_write_data_sel_to_dp;
-    logic flags_write_en_to_dp;
-    logic [`DATA_WIDTH-1:0] imm_val_to_dp;
-    logic [3:0] alu_op_to_dp;
-    logic       alu_src_a_sel_to_dp;
-    logic       alu_src_b_sel_to_dp;
-    logic dmem_write_en_to_dp;
-    logic dmem_write_en;
-    logic [1:0] dmem_addr_sel_to_dp;
-    logic [1:0] dmem_data_sel_to_dp;
-    logic sp_op_inc_to_dp;
-    logic sp_op_dec_to_dp;
+//================================================================
+// Internal Wires connecting microprocessor core
+//================================================================
+// Instruction Memory Interface
+logic [`ADDR_WIDTH-1:0] imem_addr_o;    // Address to Instruction Memory (driven by DP's PC)
+logic [7:0]             imem_rdata_i;   // Data from Instruction Memory (read by DP)
+// Data Memory Interface
+logic                   dmem_we_o;      // Data memory write enable
+logic [`ADDR_WIDTH-1:0] dmem_addr_o;    // Data memory address bus
+logic [`DATA_WIDTH-1:0] dmem_wdata_o;   // Data memory data bus
+logic [`DATA_WIDTH-1:0] dmem_rdata_i;   // Data from memory (BRAM)
     
-    // Instruction Memory Interface
-    logic [`ADDR_WIDTH-1:0] imem_addr_o;    // Address to Instruction Memory (driven by DP's PC)
-    logic [7:0]             imem_rdata_i;   // Data from Instruction Memory (read by DP)
-    // Data Memory Interface
-    logic                   dmem_we_o;
-    logic [`ADDR_WIDTH-1:0] dmem_addr_o;
-    logic [`DATA_WIDTH-1:0] dmem_wdata_o;
-    logic [`DATA_WIDTH-1:0] dmem_rdata_i;
-    
-    // To rduce pin count for development board assign gpio_in_i here.
-    logic [`DATA_WIDTH-1:0] gpio_in_i;
-    assign gpio_in_i = gpio_out_o;
+// To rduce pin count for development board assign gpio_in_i here.
+logic [`DATA_WIDTH-1:0] gpio_in_i;
+assign gpio_in_i = gpio_out_o;
     
     
 //================================================================
@@ -123,99 +100,35 @@ clk_wiz_0 abCore16_clk (
     .clk_in1   (clk_12MHz ),  // input clk_in1
     .reset     (rst_in),      // input reset; pushbutton
     // outputs
-    .clk_out1  (clk),         // 48 MHz
+    .clk_out1  (clk),         // 50 MHz
     .locked    (locked)       // clk locked
 );
 
 assign rst_n = locked;
 `endif
-    //================================================================
-    // Module Instantiations
-    //================================================================
 
-    // Datapath (DP-centric architecture)
-    datapath dp_unit (
-        .clk(clk),
-        .rst_n(rst_n),
-        .pc_to_imem_addr(imem_addr_o),
-        
-        // Control signals from CU
-        .pc_write_en_from_cu(pc_write_en_to_dp),
-        .pc_src_sel_from_cu(pc_src_sel_to_dp),
-        .rf_write_en_from_cu(rf_write_en_to_dp),
-        .rf_dest_addr_from_cu(rf_dest_addr_to_dp),
-        .rf_src1_addr_from_cu(rf_src1_addr_to_dp),
-        .rf_src2_addr_from_cu(rf_src2_addr_to_dp),
-        .rf_write_data_sel_from_cu(rf_write_data_sel_to_dp),
-        .flags_write_en_from_cu(flags_write_en_to_dp),
-        .imm_val_from_cu(imm_val_to_dp),
-        .alu_op_from_cu(alu_op_to_dp),
-        .alu_src_a_sel_from_cu(alu_src_a_sel_to_dp),
-        .alu_src_b_sel_from_cu(alu_src_b_sel_to_dp),
-        .dmem_write_en_from_cu(dmem_write_en_to_dp),
-        .dmem_addr_sel_from_cu(dmem_addr_sel_to_dp),
-        .dmem_data_sel_from_cu(dmem_data_sel_to_dp),
-        .sp_op_inc_from_cu(sp_op_inc_to_dp),
-        .sp_op_dec_from_cu(sp_op_dec_to_dp),
-        
-        // Data memory interface
-        .dmem_we_out(dmem_we_o),
-        .dmem_addr_out(dmem_addr_o),
-        .dmem_wdata_out(dmem_wdata_o),
-        .dmem_rdata_in(dmem_rdata_i),
-        
-        // GPIO interface
-        .gpio_in_data_bus(gpio_in_i),
-        .gpio_out_data_bus(gpio_out_o),
-        
-        // Outputs to CU
-        .ZF_to_cu(zf_from_dp),
-        .SF_to_cu(sf_from_dp),
-        .CF_to_cu(cf_from_dp),
-        .OF_to_cu(of_from_dp),
-        .reg_is_zero_to_cu(reg_is_zero_from_dp),
-        .reg_is_neg_to_cu(reg_is_neg_from_dp)
-    );
 
-    // Control Unit (must be compatible with DP-centric architecture)
-    control_unit cu_unit (
-        .clk(clk),
-        .rst_n(rst_n),
-        .imem_rdata_i(imem_rdata_i), // DP must receive instruction data to load its IR
-        
-        // Inputs from DP (Flags)
-        .ZF_in(zf_from_dp),
-        .SF_in(sf_from_dp),
-        .CF_in(cf_from_dp),
-        .OF_in(of_from_dp),
-        .reg_is_zero_in(reg_is_zero_from_dp),
-        .reg_is_neg_in(reg_is_neg_from_dp),
-
-        // Outputs to DP
-        .pc_write_en_out(pc_write_en_to_dp),
-        .pc_src_sel_out(pc_src_sel_to_dp),
-        .rf_write_en_out(rf_write_en_to_dp),
-        .rf_dest_addr_out(rf_dest_addr_to_dp),
-        .rf_src1_addr_out(rf_src1_addr_to_dp),
-        .rf_src2_addr_out(rf_src2_addr_to_dp),
-        .rf_write_data_sel_out(rf_write_data_sel_to_dp),
-        .flags_write_en_out(flags_write_en_to_dp),           // ab
-        .imm_val_to_dp_out(imm_val_to_dp),
-        .alu_op_out(alu_op_to_dp),
-        .alu_src_a_sel_out(alu_src_a_sel_to_dp),
-        .alu_src_b_sel_out(alu_src_b_sel_to_dp),
-        .dmem_write_en_out(dmem_write_en_to_dp),
-        .dmem_addr_sel_out(dmem_addr_sel_to_dp),
-        .dmem_data_sel_out(dmem_data_sel_to_dp),
-        .sp_op_inc_out(sp_op_inc_to_dp),
-        .sp_op_dec_out(sp_op_dec_to_dp),
-        
-        // GPIO output
-        .gpio_out_we_out(gpio_out_we_o),
-        
-        // Halted flag
-        .halted_o(halted_o)
-    );
+//================================================================
+// Module Instantiations
+//================================================================
+// abCore16 microprocessor core
+core core01 (
+    .clk           (clk),
+    .rst_n         (rst_n),
+    // Instruction Memory Interface
+    .imem_addr_o   (imem_addr_o),    // Address to Instruction Memory (driven by DP's PC)
+    .imem_rdata_i  (imem_rdata_i),   // Data from Instruction Memory (read by DP)
+    // Data Memory Interface
+    .dmem_we_o     (dmem_we_o),      // Data memory write enable
+    .dmem_addr_o   (dmem_addr_o),    // Data memory address bus
+    .dmem_wdata_o  (dmem_wdata_o),   // Data memory data bus
+    .dmem_rdata_i  (dmem_rdata_i),   // Data from memory (BRAM)
+    // GPIO Interface
+    .gpio_out_o    (gpio_out_o),
+    .gpio_out_we_o (gpio_out_we_o),   
+    // CPU halt flag
+    .halted_o      (halted_o)
+);
     
 
 //================================================================
@@ -277,12 +190,66 @@ assign rst_n = locked;
         .clkb   ( clk ),
         .enb    ( 1'b1 ),
         .web    ( dmem_we_o ),
-        .addrb  ( dmem_word_addr ), // THE FIX: Connect the corrected word address
+        .addrb  ( {1'b0,dmem_word_addr} ), // THE FIX: Connect the corrected word address
         .dinb   ( {2'b00, dmem_wdata_o} ),
         .doutb  ( dmem_rdata_i )    // 16-bits
     );
 
 `endif
     
+// ***************************************************************
+// 
+// ***************************************************************
+// Blink LED
+// blink counter
+// Using MMCM generated clock
+logic [24:0] count = '0;
+
+always_ff@(posedge clk) begin
+   if(!rst_n) begin // Synthesis tools correctly infer an async reset here
+       count <= '0; 
+   end
+   else begin 
+       count <= count + 1; 
+   end
+end
+
+assign led2_o = count[22];
+
+// Use abCore16 software counters to toggle LED
+// Memory-mapped I/O for LED control
+logic led3;
+always_ff@(posedge clk) begin
+   if(!rst_n) begin 
+       led3_o <= 1'b0; 
+       led3   <= 1'b0;
+   end
+   else begin 
+       // LED mapped-mapped IO address = 0x1800 (6144)
+       if ( (dmem_we_o == 1'b1) &&  (dmem_addr_o == 6144) ) begin  
+         if ( dmem_wdata_o == 0 ) begin   // address 0x1800
+             led3_o <= 1'b0;              // turn off LED
+             led3   <= 1'b0;
+         end
+         else begin 
+             led3_o <= 1'b1;              // turn on LED
+             led3   <= 1'b1;
+         end
+       end 
+   end
+end
+
+//----------- ILA INSTANTIATION  ---
+//logic [17:0] probe0;
+//assign probe0[17:0] = { gpio_out_o, gpio_out_we_o, led3 };
+
+logic [31:0] probe0;
+assign probe0[31:0] = { dmem_addr_o,dmem_wdata_o, dmem_we_o, led3_o };
+
+ila_0 ab_ILA (
+	.clk     (clk),   // input wire clk
+	.probe0  (probe0) // input wire [31:0] probe0
+);
+
 
 endmodule
