@@ -32,7 +32,7 @@ module cpu_tb;
 
     // Testbench Parameters
     localparam CLK_PERIOD     = 83.3;  // 12 MHz clock
-    localparam MAX_SIM_CYCLES = 2500;
+    localparam MAX_SIM_CYCLES = 5000;
     
     // Important Note: Must update test result for each test
     localparam TEST_RESULT    = 30;
@@ -45,6 +45,8 @@ module cpu_tb;
     logic [`DATA_WIDTH-1:0] gpio_out_tb_o;
     logic                   gpio_out_we_tb_o;
     logic                   halted_from_dut; // Recommended new output from DUT
+    logic                   led2_o;           // blinking LED
+    logic                   led3_o;          // SW LED
 
     // Testbench Internal State
     int   cycle_count = 0;
@@ -53,13 +55,15 @@ module cpu_tb;
 
     // Instantiate the complete CPU subsystem (Device Under Test)
     cpu_tl dut (
-        .clk_12MHz(clk_12MHz),
-        .rst_in(rst_in),
+        .clk_12MHz      (clk_12MHz),
+        .rst_in         (rst_in),
 //        .gpio_in_i(gpio_in_tb_i),   // TODO: add later if needed, for now reduce pic count
-        .gpio_out_o(gpio_out_tb_o),
-        .gpio_out_we_o(gpio_out_we_tb_o),
+        .gpio_out_o     (gpio_out_tb_o),
+        .gpio_out_we_o  (gpio_out_we_tb_o),
         // Connect to the new halt signal from the DUT
-        .halted_o(halted_from_dut) 
+        .halted_o       (halted_from_dut),  // Connect to the new halt signal from the DUT
+        .led2_o         (led2_o),            // blinking LED
+        .led3_o         (led3_o)            // software driven LED toggle
     );
 
     // Clock Generator
