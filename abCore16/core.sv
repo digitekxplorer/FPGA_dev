@@ -65,7 +65,7 @@ module core (
     logic       alu_src_a_sel_to_dp;
     logic       alu_src_b_sel_to_dp;
     logic dmem_write_en_to_dp;
-    logic dmem_write_en;
+//    logic dmem_write_en;
     logic [1:0] dmem_addr_sel_to_dp;
     logic [1:0] dmem_data_sel_to_dp;
     logic sp_op_inc_to_dp;
