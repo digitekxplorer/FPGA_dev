@@ -23,7 +23,6 @@
 //
 //////////////////////////////////////////////////////////////////////////////////
 
-
 `include "defines.svh" 
 
 //`define SIMSPEEDUP
@@ -31,15 +30,15 @@
 module cpu_tb;
 
     // Testbench Parameters
-    localparam CLK_PERIOD     = 83.3;  // 12 MHz clock
-    localparam MAX_SIM_CYCLES = 5000;
+    localparam CLK12_PERIOD     = 83.3;  // 12 MHz clock
+    localparam CLK50_PERIOD     = 20.0;  // 50 MHz clock
+    localparam MAX_SIM_CYCLES = 122000;
     
     // Important Note: Must update test result for each test
     localparam TEST_RESULT    = 30;
 
     // DUT External Connections
     logic clk_12MHz;
-//    logic clk;
     logic rst_in;
     logic [`DATA_WIDTH-1:0] gpio_in_tb_i;
     logic [`DATA_WIDTH-1:0] gpio_out_tb_o;
@@ -47,6 +46,20 @@ module cpu_tb;
     logic                   halted_from_dut; // Recommended new output from DUT
     logic                   led2_o;           // blinking LED
     logic                   led3_o;          // SW LED
+    
+    // UART
+    logic                   uart_tx_o;
+    logic                   uart_rx_i;
+    logic                   tx_trigger_btn_o;
+    // Testbench UART to test abCore16 serial interface
+    logic tb_uart_tx;
+    logic tb_uart_rx;
+    logic [7:0] tb_uart_tx_data;
+    logic [7:0] tb_uart_rx_data;
+    logic tb_uart_tx_busy;
+    logic tb_uart_rx_data_valid;
+    logic tb_uart_rx_frame_error;
+ 
 
     // Testbench Internal State
     int   cycle_count = 0;
@@ -60,16 +73,22 @@ module cpu_tb;
 //        .gpio_in_i(gpio_in_tb_i),   // TODO: add later if needed, for now reduce pic count
         .gpio_out_o     (gpio_out_tb_o),
         .gpio_out_we_o  (gpio_out_we_tb_o),
+        // UART
+        .uart_tx_o      (tb_uart_rx),
+        .uart_rx_i      (tb_uart_tx),  // testbench uart output
+        .tx_trigger_btn_i (tx_trigger_btn_o),
         // Connect to the new halt signal from the DUT
         .halted_o       (halted_from_dut),  // Connect to the new halt signal from the DUT
         .led2_o         (led2_o),            // blinking LED
         .led3_o         (led3_o)            // software driven LED toggle
     );
+    
+    assign uart_rx_i = uart_tx_o;
 
     // Clock Generator
     initial begin
         clk_12MHz = 0;
-        forever #(CLK_PERIOD / 2) clk_12MHz = ~clk_12MHz;
+        forever #(CLK12_PERIOD / 2) clk_12MHz = ~clk_12MHz;
     end
     
     // For simulation only, force the MCM pin high to speedup sim.
@@ -88,6 +107,57 @@ module cpu_tb;
     end
 `endif
 
+// Testbench UART to test abCore16 serial interface
+// UART with programmable BAUD rate.
+logic tb_uart_rst;
+logic tb_uart_tx_start;
+
+initial begin
+    $display("SIM UART START: Testbench UART to drive abCore16 serial interface.");
+    // 1. Reset the UART
+    tb_uart_rst = 1'b1;
+    tb_uart_tx_data = 'h59;
+//    tb_uart_tx_data = 'h0f;
+//    tb_uart_tx_data = 'hf0;
+//    tb_uart_tx_data = 'h35;
+    tb_uart_tx_start = 1'b0;
+    tx_trigger_btn_o = 1'b0;
+    repeat(5) @(posedge clk_12MHz);
+    tb_uart_rst = 1'b0;
+    
+    // ****************************
+    // Test Pushbutton UART TX
+//    repeat(15) @(posedge clk_12MHz);
+//    tx_trigger_btn_o = 1'b1;            // test with pushbutton
+//    repeat(1) @(posedge clk_12MHz);
+//    tx_trigger_btn_o = 1'b0;
+    // *****************************
+    
+    repeat(100) @(posedge clk_12MHz);   // wait for abCore16 setup
+    tb_uart_tx_start = 1'b1;           // TX start pulse
+    repeat(2) @(posedge clk_12MHz);
+    tb_uart_tx_start = 1'b0;
+end 
+
+// Instantiate testbench UART
+uart_mn uart02 (
+    // Ports are connected to signals here
+    .i_clk             (clk_12MHz),
+    .i_rst_n           (!tb_uart_rst),
+    // The i_baud_divider input port is tied to a constant value
+    // because it is unused by the baud rate generator logic.
+    .i_baud_divider    (16'b0),
+    .i_tx_data         (tb_uart_tx_data),        // 8-bit TX data, memory-mapped register
+    .i_tx_start        (tb_uart_tx_start),       // TX start
+    .o_tx_busy         (tb_uart_tx_busy),        // TX busy status
+    .o_rx_data         (tb_uart_rx_data),        // 8-bit RX data, memory-mapped register
+    .o_rx_data_valid   (tb_uart_rx_data_valid),  // RX data valid status
+    .o_rx_frame_error  (tb_uart_rx_frame_error), // RX error status
+    .o_uart_tx         (tb_uart_tx),             // serial TX, output
+    .i_uart_rx         (tb_uart_rx)              // serial RX, input
+);
+
+
     // Main Test Sequence
     initial begin
         $display("SIM START: System-level Testbench with Integrated BRAM");
@@ -98,7 +168,6 @@ module cpu_tb;
         gpio_in_tb_i = `DATA_WIDTH'h0000;
         #1000; // simulate pushbutton
         
-//        repeat(5) @(posedge dut.clk);
         repeat(2) @(posedge clk_12MHz);
         rst_in = 1'b0;
         $display("TB: Reset de-asserted at time %0t.", $time);
@@ -140,6 +209,7 @@ module cpu_tb;
         end
 
         $display("SIM END");
+//        $stop;
         $finish;
     end
 
