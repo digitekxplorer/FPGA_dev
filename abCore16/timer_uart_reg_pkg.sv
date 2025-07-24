@@ -57,6 +57,7 @@ package timer_uart_reg_pkg;
   } led_ctrl_t;
   
   // Complete Register Map Structure
+  // Memory-mapped base address = 0x1800
   typedef struct packed {
     timer_ctrl_t    timer_ctrl;      // 0x00
     logic [15:0]    timer_prescale;  // 0x02
