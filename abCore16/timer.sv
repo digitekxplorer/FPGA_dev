@@ -7,33 +7,18 @@
 // Design Name: abCore16 Timer Module
 // Module Name: timer
 // Project Name: abCore16
-// Target Devices: Xilinx FPGA
-// Tool Versions: Vivado
-// Description: 
-// Timer module extracted from cpu_tl. Provides configurable timer functionality
-// with prescaler, reload capability, and status reporting.
+//
+// Revision:
+// Revision 1.1 - Refactored to use timer_if interface.
 //
 //////////////////////////////////////////////////////////////////////////////////
 
-import timer_uart_reg_pkg::*;
+//import mmio_reg_pkg::*;
+`include "abcore_interfaces.sv"
 
 module timer (
-    input  logic        clk,
-    input  logic        rst_n,
-    
-    // Timer control and configuration inputs
-    input  logic        ctrl_enable,
-    input  logic        ctrl_reset,
-    input  logic        ctrl_mode,        // 0 = one-shot, 1 = continuous
-    input  logic        ctrl_prescale_en,
-    input  logic [15:0] prescale_value,
-    input  logic [31:0] reload_value,
-    
-    // Timer status outputs
-    output logic        timeout_o,
-    output logic        overflow_o,
-    output logic        running_o,
-    output logic [31:0] count_o
+    // This port list is correct.
+    timer_if.peripheral timer_bus
 );
 
 //================================================================
@@ -47,18 +32,18 @@ logic        timeout_internal;
 logic        overflow_internal;
 
 //================================================================
-// Timer Logic
+// Timer Logic - This logic now works because the modport allows access
 //================================================================
 
 // Prescaler logic
-always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
+always_ff @(posedge timer_bus.clk or negedge timer_bus.rst_n) begin
+    if (!timer_bus.rst_n) begin
         prescale_counter <= 16'h0;
         prescale_tick <= 1'b0;
     end else begin
         prescale_tick <= 1'b0;
-        if (ctrl_prescale_en && timer_running) begin
-            if (prescale_counter >= prescale_value) begin  // 50,000 (0xc350) = 1 mSec
+        if (timer_bus.prescale_en && timer_running) begin
+            if (prescale_counter >= timer_bus.prescale) begin
                 prescale_counter <= 16'h0;
                 prescale_tick <= 1'b1;
             end else begin
@@ -71,8 +56,8 @@ always_ff @(posedge clk or negedge rst_n) begin
 end
 
 // Main timer counter
-always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
+always_ff @(posedge timer_bus.clk or negedge timer_bus.rst_n) begin
+    if (!timer_bus.rst_n) begin
         counter_reg <= 32'h0;
         timeout_internal <= 1'b0;
         overflow_internal <= 1'b0;
@@ -80,23 +65,21 @@ always_ff @(posedge clk or negedge rst_n) begin
     end else begin
         timeout_internal <= 1'b0;
         
-        if (ctrl_reset) begin
-            counter_reg <= reload_value;
+        if (timer_bus.reset) begin
+            counter_reg <= timer_bus.reload_value;
             timeout_internal <= 1'b0;
             overflow_internal <= 1'b0;
             timer_running <= 1'b0;
-        end else if (ctrl_enable) begin
+        end else if (timer_bus.enable) begin
             timer_running <= 1'b1;
             
             if (prescale_tick) begin
                 if (counter_reg == 32'h0) begin
                     timeout_internal <= 1'b1;
                     
-                    if (ctrl_mode) begin
-                        // Continuous mode - reload counter
-                        counter_reg <= reload_value;
-                    end else begin
-                        // One-shot mode - stop timer
+                    if (timer_bus.mode) begin // Continuous mode
+                        counter_reg <= timer_bus.reload_value;
+                    end else begin // One-shot mode
                         timer_running <= 1'b0;
                     end
                 end else begin
@@ -115,11 +98,11 @@ always_ff @(posedge clk or negedge rst_n) begin
 end
 
 //================================================================
-// Output assignments
+// Output assignments to the interface
 //================================================================
-assign timeout_o = timeout_internal;
-assign overflow_o = overflow_internal;
-assign running_o = timer_running;
-assign count_o = counter_reg;
+assign timer_bus.timeout  = timeout_internal;
+assign timer_bus.overflow = overflow_internal;
+assign timer_bus.running  = timer_running;
+assign timer_bus.count    = counter_reg;
 
 endmodule
