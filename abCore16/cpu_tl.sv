@@ -15,6 +15,7 @@
 // Memory-mapped functionality has been extracted into a separate core_regs module.
 //
 // Revision:
+// Revision 1.4 - Refactored to use timer_if and uart_if interfaces.
 // Revision 1.3 - Extracted memory-mapped registers into separate core_regs module
 // Revision 1.2 - Extracted timer functionality into separate module
 // Revision 1.1 - Corrected connections for the reverted DP-centric architecture.
@@ -30,9 +31,10 @@
 // Stack base = 0x2000 - 2 = 0x1ffe (8190) Grows down to 0x190 (6,400)
 //
 //////////////////////////////////////////////////////////////////////////////////
-import timer_uart_reg_pkg::*;
+import mmio_reg_pkg::*;
 
 `include "defines.svh"
+`include "abcore_interfaces.sv" // INCLUDE INTERFACES FILE
 
 // For Synthesis, comment out both defines
 //`define MEMORYMODELSIM    // use hex file
@@ -58,7 +60,6 @@ import timer_uart_reg_pkg::*;
 //`define IMEM_HEX_FILE "test_blink.hex"  // blink LED using SW counters
 //`define IMEM_HEX_FILE "test_timer.hex"  // blink LED using HW timer
 `define IMEM_HEX_FILE "test_uart.hex"  // UART at 9600 baud
-
 
 module cpu_tl (
     input  logic clk_12MHz,
@@ -86,48 +87,19 @@ localparam CLK50_FREQ = 50_000_000;
 localparam UART_DATA_BITS = 8;
 localparam BAUD_RATE = 9600;
 
-// Instruction Memory Interface
-logic [`ADDR_WIDTH-1:0] imem_addr_o;    // Address to Instruction Memory (driven by DP's PC)
-logic [7:0]             imem_rdata_i;   // Data from Instruction Memory (read by DP)
-// Data Memory Interface
-logic                   dmem_we_o;      // Data memory write enable
-logic [`ADDR_WIDTH-1:0] dmem_addr_o;    // Data memory address bus
-logic [`DATA_WIDTH-1:0] dmem_wdata_o;   // Data memory data bus
-logic [`DATA_WIDTH-1:0] dmem_rdata_i;   // Data from memory (BRAM)
+// -- Internal signals --
+logic [`DATA_WIDTH-1:0] dmem_bram_rdata_i; // Renamed to distinguish from interface rdata
 
-// Memory-mapped Registers
 logic [15:0] mmio_rd_data;
-logic        mmio_rd_valid;      // currently not used
-
+logic        mmio_rd_valid;
 logic        memorymap_range;
-logic [15:0] dmem_rdata;
-
-// Timer signals (interface to timer module)
-logic        timer_enable;
-logic        timer_reset;
-logic        timer_mode;
-logic        timer_prescale_en;
-logic [15:0] timer_prescale;
-logic [31:0] timer_reload_value;
-logic        timer_timeout;
-logic        timer_overflow;
-logic        timer_running;
-logic [31:0] timer_count;
-
-// UART signals
-logic [UART_DATA_BITS-1:0]  uart_tx_data;
-logic        uart_tx_start;
-logic        uart_reset_flags;
-logic        uart_tx_busy;
-logic [UART_DATA_BITS-1:0]  uart_rx_data;
-logic        uart_rx_data_valid;
-logic        uart_rx_frame_error;
-
 logic        tx_start_btn;
-logic        uart_tx_start_combo;
-
 // LED control signal
 logic [15:0] led_ctrl;
+// clock and reset
+logic clk;
+logic rst_n;
+logic locked;
 
 // To reduce pin count for development board assign gpio_in_i here.
 logic [`DATA_WIDTH-1:0] gpio_in_i;
@@ -140,8 +112,6 @@ assign gpio_in_i = gpio_out_o;
 // To speedup simulation, use the 12MHz clock directly from the testbench
 // instead of using the MMCM clock module that takes tens of uSeconds to
 // lock.
-logic rst_n;
-logic locked;
 
 `ifdef SIMSPEEDUPCLK
 // --- FOR SIMULATION: Use the Testbench 12MHz clock ---
@@ -163,10 +133,22 @@ clk_wiz_0 abCore16_clk (
 assign rst_n = locked;
 `endif
 
+//================================================================
+// Interface Instantiations
+//================================================================
+// Instantiate the interfaces that will bundle signals between modules.
+// Pass the system clock and reset to them.
+timer_if timer_bus ( .clk(clk), .rst_n(rst_n) );
+uart_if  uart_bus  ( .clk(clk), .rst_n(rst_n) );
+// --- CPU Bus Interfaces ---
+imem_bus_if imem_bus ( .clk(clk), .rst_n(rst_n) );
+dmem_bus_if dmem_bus ( .clk(clk), .rst_n(rst_n) );
+gpio_bus_if gpio_bus ( .clk(clk), .rst_n(rst_n) );
 
 //================================================================
-// UART RX sync
+// Top-Level Port Connections and Logic
 //================================================================
+// --- UART RX sync ---
 logic [1:0] uart_rx_shft;
 logic       uart_rx_sync;
 always_ff @(posedge clk or negedge rst_n) begin
@@ -176,145 +158,86 @@ always_ff @(posedge clk or negedge rst_n) begin
         uart_rx_shft <= { uart_rx_shft[0], uart_rx_i };
     end
 end
-
 assign uart_rx_sync = uart_rx_shft[1];
+
+// --- GPIO Output Assignment ---
+// The top-level output ports are now driven by the gpio_bus interface
+assign gpio_out_o    = gpio_bus.data;
+assign gpio_out_we_o = gpio_bus.wren;
+
 
 //================================================================
 // Memory-mapped IO range check and data mux
 //================================================================
 // Memory-mapped IO between 0x1800 and 0x1900 (6144 and 6400)
-assign memorymap_range = ( dmem_addr_o>=6144 && dmem_addr_o<6400 );
-// Mux to select between BRAM data and Memory-mapped IO
+// --- Data Memory Read Mux ---
+// This logic now determines what data gets driven INTO the dmem_bus
+//assign memorymap_range = ( dmem_bus.addr >= 6144 && dmem_bus.addr < 6400 );
+assign memorymap_range = ( dmem_bus.addr >= MMIO_ADDRESS_BASE && 
+                           dmem_bus.addr < (MMIO_ADDRESS_BASE + MMIO_ADDRESS_RANGE) );
 always_comb begin
     if (memorymap_range) begin
-        dmem_rdata = mmio_rd_data;
-    end
-    else begin
-        dmem_rdata = dmem_rdata_i;
+        dmem_bus.rdata = mmio_rd_data;      // Read data comes from memory-mapped IO
+    end else begin
+        dmem_bus.rdata = dmem_bram_rdata_i; // Read data comes from BRAM
     end
 end
 
 //================================================================
 // Module Instantiations
 //================================================================
-// abCore16 microprocessor core
+// --- abCore16 microprocessor core ---
+// There are three microprocessor interfaces defined: 
+// 1) instruction memory  (access instructions from memory)
+// 2) data memory (access both data and memory-mapped IO)
+// 3) GPIO bus (GPIO bus used for print instruction)
 core core01 (
-    .clk           (clk),
-    .rst_n         (rst_n),
-    // Instruction Memory Interface
-    .imem_addr_o   (imem_addr_o),    // Address to Instruction Memory (driven by DP's PC)
-    .imem_rdata_i  (imem_rdata_i),   // Data from Instruction Memory (read by DP)
-    // Data Memory Interface
-    .dmem_we_o     (dmem_we_o),      // Data memory write enable
-    .dmem_addr_o   (dmem_addr_o),    // Data memory address bus
-    .dmem_wdata_o  (dmem_wdata_o),   // Data memory data bus
-    .dmem_rdata_i  (dmem_rdata),     // Data from BRAM or Memory-mapped IO
-    // GPIO Interface
-    .gpio_out_o    (gpio_out_o),
-    .gpio_out_we_o (gpio_out_we_o),   
-    // CPU halt flag
-    .halted_o      (halted_o)
+    .clk       (clk),
+    .rst_n     (rst_n),
+    .imem_bus  (imem_bus.master),  // instruction bus interface
+    .dmem_bus  (dmem_bus.master),  // data bus interface
+    .gpio_bus  (gpio_bus.cpu),     // gpio bus interface
+    .halted_o  (halted_o)
 );
 
-//================================================================
-// Memory-mapped Registers Module Instantiation
-//================================================================
-core_regs core_regs01 (
+// --- Memory-mapped IO Registers ---
+// Use CPU data bus to access memory-mapped registers.
+mmio_regs mmio_regs01 (
     .clk                    (clk),
     .rst_n                  (rst_n),
-    
-    // CPU Interface
-    .dmem_we_i              (dmem_we_o),
-    .dmem_addr_i            (dmem_addr_o),
-    .dmem_wdata_i           (dmem_wdata_o),
+    .dmem_bus               (dmem_bus.slave),        // cpu interface (data bus)
+    .timer_bus              (timer_bus.controller),  // timer interface
+    .uart_bus               (uart_bus.controller),   // uart interface
+    .memorymap_range        (memorymap_range),
     .mmio_rd_data_o         (mmio_rd_data),
     .mmio_rd_valid_o        (mmio_rd_valid),
-    
-    // Timer Interface
-    .timer_enable_o         (timer_enable),
-    .timer_reset_o          (timer_reset),
-    .timer_mode_o           (timer_mode),
-    .timer_prescale_en_o    (timer_prescale_en),
-    .timer_prescale_o       (timer_prescale),
-    .timer_reload_value_o   (timer_reload_value),
-    .timer_timeout_i        (timer_timeout),
-    .timer_overflow_i       (timer_overflow),
-    .timer_running_i        (timer_running),
-    .timer_count_i          (timer_count),
-    
-    // UART Interface
-    .uart_tx_data_o         (uart_tx_data),
-    .uart_tx_start_o        (uart_tx_start),
-    .uart_reset_flags_o     (uart_reset_flags),
-    .uart_tx_busy_i         (uart_tx_busy),
-    .uart_rx_data_i         (uart_rx_data),
-    .uart_rx_data_valid_i   (uart_rx_data_valid),
-    .uart_rx_frame_error_i  (uart_rx_frame_error),
-    
-    // LED Interface
     .led_ctrl_o             (led_ctrl)
 );
 
-//================================================================
-// Timer Module Instantiation
-//================================================================
+// --- Timer Module Instantiation ---
 timer timer01 (
-    .clk               (clk),
-    .rst_n             (rst_n),
-    // Control inputs
-    .ctrl_enable       (timer_enable),
-    .ctrl_reset        (timer_reset),
-    .ctrl_mode         (timer_mode),
-    .ctrl_prescale_en  (timer_prescale_en),
-    .prescale_value    (timer_prescale),
-    .reload_value      (timer_reload_value),
-    // Status outputs
-    .timeout_o         (timer_timeout),
-    .overflow_o        (timer_overflow),
-    .running_o         (timer_running),
-    .count_o           (timer_count)
+    // Connect the peripheral side of the interface
+    .timer_bus(timer_bus.peripheral)    // timer interface
 );
 
-//================================================================
-// UART Module Instantiation
-//================================================================
+
+// --- UART Module Instantiation ---
 // UART with programmable BAUD rate.
 uart_mn #(
-    // Parameters are passed to the instance here
     .CLK_FREQ(CLK50_FREQ),
-    .DATA_BITS(UART_DATA_BITS),    // Explicitly pass DATA_BITS
-    .BAUD_RATE(BAUD_RATE)          // Explicitly pass BAUD_RATE
+    .DATA_BITS(UART_DATA_BITS),
+    .BAUD_RATE(BAUD_RATE)
 ) uart01 (
-    // Ports are connected to signals here
-    .i_clk             (clk),
-    .i_rst_n           (rst_n),
-    // The i_baud_divider input port is tied to a constant value
-    // because it is unused by the baud rate generator logic.
+    .uart_bus          (uart_bus.peripheral),   // uart interface
     .i_baud_divider    (16'b0),
-    .i_tx_data         (uart_tx_data),        // 8-bit TX data, memory-mapped register
-    .i_tx_start        (uart_tx_start_combo), // memory-mapped or pushbutton
-    .o_tx_busy         (uart_tx_busy),        // TX busy status
-    .o_rx_data         (uart_rx_data),        // 8-bit RX data, memory-mapped register
-    .o_rx_data_valid   (uart_rx_data_valid),  // RX data valid status
-    .o_rx_frame_error  (uart_rx_frame_error), // RX error status
-    .o_uart_tx         (uart_tx_o),           // serial TX, output
-    .i_uart_rx         (uart_rx_sync)            // serial RX, input
+    .i_tx_start_manual (tx_start_btn),
+    .o_uart_tx         (uart_tx_o),
+    .i_uart_rx         (uart_rx_sync)
 );
 
-// TX start combination
-always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-        uart_tx_start_combo <= 1'b0;
-    end else begin
-        uart_tx_start_combo <= uart_tx_start | tx_start_btn;
-    end
-end
-
-//================================================================
-// UART Manual Trigger
-//================================================================
+// --- UART Manual Trigger using pushbutton ---
 // Sync and edge detector for the button press to create a single-cycle 
-// start pulse
+// start pulse. Used to test UART.
 logic [2:0] tx_trig_shft;
 always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -329,68 +252,81 @@ end
 
 
 //================================================================
-// Conditional Memory Instantiation (`generate` block)
+// Conditional Memory Instantiation
 //================================================================
+// Use .hex file for fast simulation model without having to update
+// BRAM IP.
+
 `ifdef MEMORYMODELSIM
     
     initial begin
-        $display("INFO: Compiling with SIMULATION behavioral memory model.");
-        $display("INFO: Loading instruction memory from '%s'.", `IMEM_HEX_FILE);
+        $display("SIM_INFO: Compiling with SIMULATION behavioral memory model.");
+        $display("SIM_INFO: Loading instruction memory from '%s'.", `IMEM_HEX_FILE);
     end
 
     // Behavioral Instruction and Data Memory
     logic [7:0] instruction_memory [0:`INSTRUCTION_MEMORY_BYTES-1];
-    logic [`DATA_WIDTH-1:0] data_memory [0: (`DATA_MEMORY_BYTES/2)-1]; // Corrected indexing for word array
-
+    logic [`DATA_WIDTH-1:0] data_memory [0: (`DATA_MEMORY_BYTES/2)-1];
+    // Read the .hex file and place in Instruction Memory, much faster process
+    // than updating the BRAM IP.
     initial $readmemh(`IMEM_HEX_FILE, instruction_memory);
 
-    // Read from Instruction and Data memory.
+    // Read from Instruction and Data memory. Use bus interfaces.
     // One clock latency to match BRAM behavior
     always_ff @(posedge clk) begin
-        imem_rdata_i  <= instruction_memory[imem_addr_o];    // no addr to dout dly
-        dmem_rdata_i = data_memory[dmem_addr_o >> 1];
+        // The memory drives the read data signal of the instruction bus
+        imem_bus.rdata  <= instruction_memory[imem_bus.addr];
+        // The memory drives the dedicated BRAM read data wire
+        dmem_bram_rdata_i = data_memory[dmem_bus.addr >> 1];
     end
     
     // Write to Data memory
+    // Use bus interfaces.
+    // One clock latency to match BRAM behavior
     always_ff @(posedge clk) begin
-        if (dmem_we_o) begin
-            data_memory[dmem_addr_o >> 1] <= dmem_wdata_o;
+        // Check the write enable from the data bus
+        if (dmem_bus.wren) begin
+            // Use the address and write data from the data bus
+            data_memory[dmem_bus.addr >> 1] <= dmem_bus.wdata;
         end
     end
     
 `else
     // --- FOR SYNTHESIS: Use the real BRAM IP Core ---
+    // BRAM IP must be updated with the lastest .coe to initialize the
+    // instruction memory with the last C-like program or assembly language
+    // program.
     initial begin
         $display("INFO: Compiling with SYNTHESIS BRAM IP Core model.");
     end
     
-    // Create a wire for the word-aligned data memory address
-    logic [`ADDR_WIDTH-2:0] dmem_word_addr;
     
+    logic [`ADDR_WIDTH-2:0] dmem_word_addr;
     // Convert the byte address from the CPU to a word address for the BRAM
     // by right-shifting by one (equivalent to dropping the LSB).
-    assign dmem_word_addr = dmem_addr_o >> 1;
+    assign dmem_word_addr = dmem_bus.addr >> 1;
 
-    // Program Memory IP Core
-    // NOTE: instruction memory access is 8-bits while 
-    //       data memory access is 16-bits
+    // BRAM: Program Memory IP Core
+    // NOTE: instruction memory access is 8-bits while data memory access is 
+    // 16-bit so a true dual port BRAM was used to provide both 8-bit and
+    // 16-bit access in a single memory.
     abCore16_blk_mem cpu_mem (
-        // Instruction Memory Interface
+        // Instruction Memory Interface (connected to imem_bus, 8-bit access)
+        // Instruction memory is a ROM or read-only so wea is always 1'b0.
         .clka   ( clk ),
-        .ena    ( 1'b1 ),
-        .wea    ( 1'b0 ),       // ROM
-        .addra  ( imem_addr_o[12:0] ),
-        .dina   ( 9'b0 ),       // ROM
-        .douta  ( imem_rdata_i ),   // 8-bits
-        // Data Memory Interface
+        .ena    ( 1'b1 ),    // dout always active
+        .wea    ( 1'b0 ),
+        .addra  ( imem_bus.addr[12:0] ),
+        .dina   ( 9'b0 ),
+        .douta  ( imem_bus.rdata ),   // BRAM drives the interface's read data
+        // Data Memory Interface (connected to dmem_bus, 16-bit access)
         .clkb   ( clk ),
-        .enb    ( 1'b1 ),
-        .web    ( dmem_we_o ),
-        .addrb  ( {1'b0,dmem_word_addr} ), // THE FIX: Connect the corrected word address
-        .dinb   ( {2'b00, dmem_wdata_o} ),
-        .doutb  ( dmem_rdata_i )    // 16-bits
+        .enb    ( 1'b1 ),    // dout always active
+        .web    ( dmem_bus.wren ),
+        .addrb  ( {1'b0, dmem_word_addr} ),
+        .dinb   ( {2'b00, dmem_bus.wdata} ),
+        .doutb  ( dmem_bram_rdata_i )    // BRAM drives the dedicated bus
     );
-
 `endif
     
 //================================================================
@@ -398,7 +334,6 @@ end
 //================================================================
 // Blink LED
 // blink counter
-// Using MMCM generated clock
 logic [24:0] count = '0;
 
 always_ff@(posedge clk) begin
@@ -415,39 +350,42 @@ assign led2_o = count[22];
 // Use abCore16 software counters to toggle LED
 // Memory-mapped I/O for LED control
 logic led3;
+// This block uses the dmem_bus interface signals
 always_ff@(posedge clk) begin
    if(!rst_n) begin 
        led3_o <= 1'b0; 
        led3   <= 1'b0;
    end
    else begin 
-       // LED mapped-mapped IO address = 0x1800 (6144)
-       if ( (dmem_we_o == 1'b1) &&  (dmem_addr_o == 6168) ) begin  // 0x1818
-         if ( dmem_wdata_o == 0 ) begin 
-             led3_o <= 1'b0;              // turn off LED
+       // LED memory-mapped IO address = 0x1818 (6168)
+       // Check for a write to the correct address using the DATA MEMORY BUS
+       // ADDRESS_LED_CTRL
+       if ( (dmem_bus.wren == 1'b1) &&  (dmem_bus.addr == ADDRESS_LED_CTRL) ) begin
+         if ( dmem_bus.wdata == 0 ) begin 
+             led3_o <= 1'b0;
              led3   <= 1'b0;
          end
          else begin 
-             led3_o <= 1'b1;              // turn on LED
+             led3_o <= 1'b1;
              led3   <= 1'b1;
          end
        end 
    end
 end
-
-//----------- ILA INSTANTIATION  ---
-//logic [17:0] probe0;
-//assign probe0[17:0] = { gpio_out_o, gpio_out_we_o, led3 };
-
+    
+//================================================================
+// ILA INSTANTIATION
+//================================================================
+//--- ILA_0  ---
 logic [31:0] probe0;
-assign probe0[31:0] = { dmem_addr_o[8:0], uart_rx_data, uart_tx_data, uart_tx_o, uart_rx_sync, 
-                        uart_tx_start, uart_tx_start_combo, uart_rx_data_valid,
-                        dmem_we_o, led3_o };
+// The ILA probe uses the dmem_bus interface signals
+assign probe0[31:0] = { dmem_bus.addr[8:0], uart_bus.rx_data, uart_bus.tx_data, uart_tx_o, uart_rx_sync, 
+                        uart_bus.tx_start, 1'b0, uart_bus.rx_data_valid,
+                        dmem_bus.wren, led3_o };
 
 ila_0 ab_ILA (
-	.clk     (clk),   // input wire clk
-	.probe0  (probe0) // input wire [31:0] probe0
+	.clk     (clk),
+	.probe0  (probe0)
 );
-
 
 endmodule
