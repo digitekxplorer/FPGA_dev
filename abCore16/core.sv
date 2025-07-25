@@ -10,48 +10,72 @@
 // Target Devices: Xilinx FPGA
 // Tool Versions: Vivado
 // Description: 
-// Top-level module for the microprocessor core. This version is updated to correctly
-// instantiate the original DP-centric datapath and a compatible control unit.
+// Top-level module for the microprocessor core. This version uses interfaces
+// for its main instruction, data, and GPIO buses.
 //
 // Revision:
+// Revision 1.2 - Refactored to use imem_bus_if, dmem_bus_if, and gpio_bus_if.
 // Revision 1.1 - Corrected connections for the reverted DP-centric architecture.
-// Additional Comments:
-// The architecture is now DP-centric. The Datapath fetches and latches 
-// instruction bytes into its IRs and provides them to the Control Unit.
 //
 //////////////////////////////////////////////////////////////////////////////////
 
 `include "defines.svh"
+`include "abcore_interfaces.sv"
 
 module core (
     input  logic clk,
     input  logic rst_n,
-	
-    // Instruction Memory Interface
-    output logic [`ADDR_WIDTH-1:0] imem_addr_o,    // Address to Instruction Memory (driven by DP's PC)
-    input  logic [7:0]             imem_rdata_i,   // Data from Instruction Memory (read by DP)
-    // Data Memory Interface
-    output logic                   dmem_we_o,      // Data memory write enable
-    output logic [`ADDR_WIDTH-1:0] dmem_addr_o,    // Data memory address bus
-    output logic [`DATA_WIDTH-1:0] dmem_wdata_o,   // Data memory data bus
-    input  logic [`DATA_WIDTH-1:0] dmem_rdata_i,   // Data from memory (BRAM)
 
-    // GPIO Interface
-    output logic [`DATA_WIDTH-1:0] gpio_out_o,
-    output logic                   gpio_out_we_o,   
+    // Interface Ports <<< UPDATED
+    imem_bus_if.master imem_bus,
+    dmem_bus_if.master dmem_bus,
+    gpio_bus_if.cpu    gpio_bus,
+	
     // CPU halt flag
-    output logic                   halted_o
+    output logic       halted_o
 );
 
     //================================================================
-    // Internal Wires connecting Control Unit (CU) and Datapath (DP)
+    // Internal Wires for CPU buses
+    // These signals now connect the internal modules to the interfaces.
     //================================================================
-    // --- From Datapath TO Control Unit ---
+    // --- Instruction Memory Interface ---
+    logic [`ADDR_WIDTH-1:0] imem_addr_o;    // To datapath's PC output
+    logic [7:0]             imem_rdata_i;   // To control unit's instruction input
+    // --- Data Memory Interface ---
+    logic                   dmem_we_o;      // From datapath
+    logic [`ADDR_WIDTH-1:0] dmem_addr_o;    // From datapath
+    logic [`DATA_WIDTH-1:0] dmem_wdata_o;   // From datapath
+    logic [`DATA_WIDTH-1:0] dmem_rdata_i;   // To datapath
+    // --- GPIO Interface ---
+    logic [`DATA_WIDTH-1:0] gpio_out_o;     // From datapath
+    logic                   gpio_out_we_o;  // From control unit
+
+    // --- Connect Interfaces to Internal Wires <<< NEW SECTION ---
+    // This logic bridges the gap between the external interfaces and the
+    // internal modules, which still use discrete wire connections.
+
+    // Connect outputs from the core TO the interfaces
+    assign imem_bus.addr  = imem_addr_o;
+    assign dmem_bus.wren  = dmem_we_o;
+    assign dmem_bus.addr  = dmem_addr_o;
+    assign dmem_bus.wdata = dmem_wdata_o;
+    assign gpio_bus.data  = gpio_out_o;
+    assign gpio_bus.wren  = gpio_out_we_o;
+
+    // Connect inputs TO the core FROM the interfaces
+    assign imem_rdata_i = imem_bus.rdata;
+    assign dmem_rdata_i = dmem_bus.rdata;
+    //-------------------------------------------------------------
+
+    //================================================================
+    // Internal Wires connecting Control Unit (CU) and Datapath (DP)
+    // (This section is unchanged)
+    //================================================================
     logic zf_from_dp, sf_from_dp, cf_from_dp, of_from_dp;
     logic reg_is_zero_from_dp;
     logic reg_is_neg_from_dp;
 
-    // --- From Control Unit TO Datapath ---
     logic pc_write_en_to_dp;
     logic [2:0] pc_src_sel_to_dp;
     logic rf_write_en_to_dp;
@@ -65,19 +89,19 @@ module core (
     logic       alu_src_a_sel_to_dp;
     logic       alu_src_b_sel_to_dp;
     logic dmem_write_en_to_dp;
-//    logic dmem_write_en;
     logic [1:0] dmem_addr_sel_to_dp;
     logic [1:0] dmem_data_sel_to_dp;
     logic sp_op_inc_to_dp;
     logic sp_op_dec_to_dp;
     
-    // To rduce pin count for development board assign gpio_in_i here.
+    // To reduce pin count for development board assign gpio_in_i here.
     logic [`DATA_WIDTH-1:0] gpio_in_i;
     assign gpio_in_i = gpio_out_o;
     
     
     //================================================================
     // Module Instantiations
+    // (The connections here are to the internal wires, not directly to interfaces)
     //================================================================
 
     // Datapath (DP-centric architecture)
@@ -146,7 +170,7 @@ module core (
         .rf_src1_addr_out(rf_src1_addr_to_dp),
         .rf_src2_addr_out(rf_src2_addr_to_dp),
         .rf_write_data_sel_out(rf_write_data_sel_to_dp),
-        .flags_write_en_out(flags_write_en_to_dp),           // ab
+        .flags_write_en_out(flags_write_en_to_dp),
         .imm_val_to_dp_out(imm_val_to_dp),
         .alu_op_out(alu_op_to_dp),
         .alu_src_a_sel_out(alu_src_a_sel_to_dp),
@@ -164,7 +188,4 @@ module core (
         .halted_o(halted_o)
     );
     
-   
-
-
 endmodule
