@@ -1,9 +1,9 @@
 // July 17, 2025
-// SystemVerilog Structures for Memory-Mapped Registers for abCore16
-`ifndef TIMER_UART_REG_PKG
-`define TIMER_UART_REG_PKG
+// SystemVerilog Structures for abCore16 Memory-Mapped IO Registers
+`ifndef MMIO_REG_PKG
+`define MMIO_REG_PKG
 
-package timer_uart_reg_pkg;
+package mmio_reg_pkg;
 
   // ************************
   // Register Data Structures
@@ -78,26 +78,27 @@ package timer_uart_reg_pkg;
   // *********************
   // Register Address Map
   // *********************
-  parameter ADDRESS_BASE            = 16'h1800;
-  parameter ADDRESS_TIMER_CTRL      = 16'h1800;
-  parameter ADDRESS_TIMER_PRESCALE  = 16'h1802;
-  parameter ADDRESS_TIMER_RELOAD_L  = 16'h1804;
-  parameter ADDRESS_TIMER_RELOAD_H  = 16'h1806;
-  parameter ADDRESS_TIMER_COUNT_L   = 16'h1808;
-  parameter ADDRESS_TIMER_COUNT_H   = 16'h180A;
-  parameter ADDRESS_TIMER_STATUS    = 16'h180C;
-  parameter ADDRESS_UART_CTRL       = 16'h1810;
-  parameter ADDRESS_UART_STATUS     = 16'h1812;
-  parameter ADDRESS_UART_TX_DATA    = 16'h1814;
-  parameter ADDRESS_UART_RX_DATA    = 16'h1816;
-  parameter ADDRESS_LED_CTRL        = 16'h1818;
+  localparam MMIO_ADDRESS_BASE       = 16'h1800;
+  localparam MMIO_ADDRESS_RANGE      = 16'h0100;
+  localparam ADDRESS_TIMER_CTRL      = MMIO_ADDRESS_BASE + 16'h0000;
+  localparam ADDRESS_TIMER_PRESCALE  = MMIO_ADDRESS_BASE + 16'h0002;
+  localparam ADDRESS_TIMER_RELOAD_L  = MMIO_ADDRESS_BASE + 16'h0004;
+  localparam ADDRESS_TIMER_RELOAD_H  = MMIO_ADDRESS_BASE + 16'h0006;
+  localparam ADDRESS_TIMER_COUNT_L   = MMIO_ADDRESS_BASE + 16'h0008;
+  localparam ADDRESS_TIMER_COUNT_H   = MMIO_ADDRESS_BASE + 16'h000A;
+  localparam ADDRESS_TIMER_STATUS    = MMIO_ADDRESS_BASE + 16'h000C;
+  localparam ADDRESS_UART_CTRL       = MMIO_ADDRESS_BASE + 16'h0010;
+  localparam ADDRESS_UART_STATUS     = MMIO_ADDRESS_BASE + 16'h0012;
+  localparam ADDRESS_UART_TX_DATA    = MMIO_ADDRESS_BASE + 16'h0014;
+  localparam ADDRESS_UART_RX_DATA    = MMIO_ADDRESS_BASE + 16'h0016;
+  localparam ADDRESS_LED_CTRL        = MMIO_ADDRESS_BASE + 16'h0018;
   
   // *********************
   // Register Parameters
   // *********************
-  parameter REGISTER_COUNT = 12;
-  parameter REGISTER_DWIDTH = 16;
-  parameter ADDRESS_WIDTH = 14;
+  localparam REGISTER_COUNT = 12;
+  localparam REGISTER_DWIDTH = 16;
+  localparam ADDRESS_WIDTH = 14;
   
   // Helper functions for register access
   // Currently not used.
@@ -116,6 +117,6 @@ package timer_uart_reg_pkg;
     endcase
   endfunction
 
-endpackage : timer_uart_reg_pkg
+endpackage : mmio_reg_pkg
 
 `endif
