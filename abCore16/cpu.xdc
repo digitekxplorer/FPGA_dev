@@ -9,6 +9,7 @@ create_clock -add -name clk_12MHz -period 83.33 -waveform {0 41.66} [get_ports {
 
 ## Push Buttons
 set_property -dict { PACKAGE_PIN D2    IOSTANDARD LVCMOS33 } [get_ports { rst_in }];
+set_property -dict { PACKAGE_PIN D1    IOSTANDARD LVCMOS33 } [get_ports { tx_trigger_btn_i }];
 
 #set_property -dict { PACKAGE_PIN D2    IOSTANDARD LVCMOS33 } [get_ports { btn[0] }]; #IO_L6P_T0_34 Sch=btn[0]
 #set_property -dict { PACKAGE_PIN D1    IOSTANDARD LVCMOS33 } [get_ports { btn[1] }]; #IO_L6N_T0_VREF_34 Sch=btn[1]
@@ -51,6 +52,13 @@ set_property -dict { PACKAGE_PIN E1    IOSTANDARD LVCMOS33 } [get_ports { led3_o
 #set_property -dict { PACKAGE_PIN A12   IOSTANDARD LVCMOS33 } [get_ports { vaux12_n }]; #IO_L11N_T1_SRCC_AD12N_15 Sch=ain_n[33]
 
 ## Dedicated Digital I/O on the PIO Headers
+# *****UART *****
+# PIO26 -> uart_tx
+set_property -dict { PACKAGE_PIN L14    IOSTANDARD LVCMOS33 } [get_ports { uart_tx_o }];
+# PIO27 -> uart_rx
+set_property -dict { PACKAGE_PIN K14    IOSTANDARD LVCMOS33 } [get_ports { uart_rx_i }];
+# *****UART *****
+
 set_property -dict { PACKAGE_PIN L1    IOSTANDARD LVCMOS33 } [get_ports { gpio_out_o[0] }];
 set_property -dict { PACKAGE_PIN M4    IOSTANDARD LVCMOS33 } [get_ports { gpio_out_o[1] }];
 set_property -dict { PACKAGE_PIN M3    IOSTANDARD LVCMOS33 } [get_ports { gpio_out_o[2] }];
