@@ -137,8 +137,9 @@ always_ff @(posedge clk or negedge rst_n) begin
         end 
         
         // Update UART status from UART interface
-        reg_map.uart_status.tx_busy   <= uart_bus.tx_busy;
-        reg_map.uart_status.rx_error  <= uart_bus.rx_frame_error;
+//        reg_map.uart_status.tx_busy   <= uart_bus.tx_busy;
+        reg_map.uart_status.tx_fifo_avail <= uart_bus.tx_fifo_avail;
+        reg_map.uart_status.rx_error      <= uart_bus.rx_frame_error;
         if (uart_bus.rx_data_valid) begin
             reg_map.uart_rx_data.data     <= uart_bus.rx_data;
             reg_map.uart_status.rx_valid  <= 1'b1;
