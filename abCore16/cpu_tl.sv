@@ -85,7 +85,8 @@ module cpu_tl (
 // UART parameters
 localparam CLK50_FREQ = 50_000_000;
 localparam UART_DATA_BITS = 8;
-localparam BAUD_RATE = 9600;
+//localparam BAUD_RATE = 9600;
+localparam BAUD_RATE = 115200;
 
 // -- Internal signals --
 logic [`DATA_WIDTH-1:0] dmem_bram_rdata_i; // Renamed to distinguish from interface rdata
