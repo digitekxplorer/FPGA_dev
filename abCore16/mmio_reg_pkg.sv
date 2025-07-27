@@ -38,7 +38,8 @@ package mmio_reg_pkg;
     logic [12:0] reserved;      // Reserved bits [15:3]
     logic        rx_error;      // RX frame error [2]
     logic        rx_valid;      // RX data valid [1]
-    logic        tx_busy;       // TX busy status [0]
+//    logic        tx_busy;       // TX busy status [0]
+    logic        tx_fifo_avail; // TX FIFO status [0]
   } uart_status_t;
   
   // UART Data Registers (0x14, 0x16)
