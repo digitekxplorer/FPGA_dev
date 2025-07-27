@@ -13,7 +13,7 @@
 
 `include "defines.svh"
 
-// --- Instruction Memory Bus Interface <<< NEW ---
+// --- Instruction Memory Bus Interface ---
 interface imem_bus_if (input logic clk, input logic rst_n);
     logic [`ADDR_WIDTH-1:0] addr;
     logic [7:0]             rdata;
@@ -32,7 +32,7 @@ interface imem_bus_if (input logic clk, input logic rst_n);
 endinterface
 
 
-// --- Data Memory Bus Interface <<< NEW ---
+// --- Data Memory Bus Interface ---
 interface dmem_bus_if (input logic clk, input logic rst_n);
     logic                   wren;
     logic [`ADDR_WIDTH-1:0] addr;
@@ -57,7 +57,7 @@ interface dmem_bus_if (input logic clk, input logic rst_n);
 endinterface
 
 
-// --- GPIO Output Bus Interface <<< NEW ---
+// --- GPIO Output Bus Interface ---
 interface gpio_bus_if (input logic clk, input logic rst_n);
     logic [`DATA_WIDTH-1:0] data;
     logic                   wren;
@@ -92,17 +92,33 @@ endinterface
 // --- UART Interface ---
 interface uart_if (input logic clk, input logic rst_n);
     logic [7:0]  tx_data, rx_data;
-    logic        tx_start, reset_flags, tx_busy, rx_data_valid, rx_frame_error;
-
+    logic        tx_start, reset_flags, tx_fifo_avail, rx_data_valid, rx_frame_error;
+    
     modport controller ( 
-        input clk, rst_n, tx_busy, rx_data, rx_data_valid, rx_frame_error, 
+        input clk, rst_n, tx_fifo_avail, rx_data, rx_data_valid, rx_frame_error, 
         output tx_data, tx_start, reset_flags 
     );
     
     modport peripheral ( 
-        output tx_busy, rx_data, rx_data_valid, rx_frame_error, 
+        output tx_fifo_avail, rx_data, rx_data_valid, rx_frame_error, 
         input clk, rst_n, tx_data, tx_start, reset_flags 
     );
+
+
+
+//interface uart_if (input logic clk, input logic rst_n);
+//    logic [7:0]  tx_data, rx_data;
+//    logic        tx_start, reset_flags, tx_busy, rx_data_valid, rx_frame_error;
+
+//    modport controller ( 
+//        input clk, rst_n, tx_busy, rx_data, rx_data_valid, rx_frame_error, 
+//        output tx_data, tx_start, reset_flags 
+//    );
+    
+//    modport peripheral ( 
+//        output tx_busy, rx_data, rx_data_valid, rx_frame_error, 
+//        input clk, rst_n, tx_data, tx_start, reset_flags 
+//    );
     
 endinterface
 
