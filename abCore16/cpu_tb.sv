@@ -52,16 +52,6 @@ module cpu_tb;
     logic [`DATA_WIDTH-1:0] captured_gpio_out = 'x;
 
     //================================================================
-    // Interface Instantiation for the Testbench's UART <<< NEW
-    //================================================================
-    // This interface belongs to the testbench and will be connected to uart02.
-    // It is driven by the testbench's clock and reset.
-    uart_if tb_uart_bus (
-        .clk(clk_12MHz), 
-        .rst_n(!tb_uart_rst)
-    );
-
-    //================================================================
     // DUT Instantiation
     //================================================================
     cpu_tl dut (
@@ -69,7 +59,7 @@ module cpu_tb;
         .rst_in         (rst_in),
         .gpio_out_o     (gpio_out_tb_o),
         .gpio_out_we_o  (gpio_out_we_tb_o),
-        // Connect the DUT's physical pins to the testbench wires
+        // Connect the DUT's physical pins to the testbench signals
         .uart_tx_o      (dut_tx_wire),
         .uart_rx_i      (dut_rx_wire),
         .tx_trigger_btn_i (tx_trigger_btn_o),
@@ -96,7 +86,17 @@ module cpu_tb;
 `endif
 
     //================================================================
-    // Testbench UART Driver Logic <<< UPDATED
+    // Interface Instantiation for the Testbench's UART
+    //================================================================
+    // This interface belongs to the testbench and will be connected to uart02.
+    // It is driven by the testbench's clock and reset.
+    uart_if tb_uart_bus (
+        .clk(clk_12MHz), 
+        .rst_n(!tb_uart_rst)
+    );
+
+    //================================================================
+    // Testbench UART Driver Logic
     //================================================================
     initial begin
         $display("SIM UART START: Testbench UART to drive abCore16 serial interface.");
@@ -120,15 +120,24 @@ module cpu_tb;
         repeat(100) @(posedge clk_12MHz);   // wait for abCore16 setup
         
         // Start the transmission by asserting the start signal inside the interface
-        tb_uart_bus.tx_start <= 1'b1;
-        repeat(2) @(posedge clk_12MHz);
+        tb_uart_bus.tx_start <= 1'b1;      // send one single pulse
+//        repeat(2) @(posedge clk_12MHz);
+        @(posedge clk_12MHz);
         tb_uart_bus.tx_start <= 1'b0;
     end 
 
     //================================================================
-    // Testbench UART Instantiation <<< UPDATED
+    // Testbench UART Instantiation
     //================================================================
-    uart_mn uart02 (
+    localparam CLK50_FREQ = 50_000_000;
+    localparam UART_DATA_BITS = 8;
+    localparam BAUD_RATE = 9600;
+    //localparam BAUD_RATE = 115200;
+    uart_mn #(
+          .CLK_FREQ(CLK50_FREQ),
+          .DATA_BITS(UART_DATA_BITS),
+          .BAUD_RATE(BAUD_RATE)
+        ) uart02 (
         // No separate clk/rst, they come from the interface now
         .uart_bus          (tb_uart_bus.peripheral), // Connect the TB interface
         .i_baud_divider    (16'b0),
