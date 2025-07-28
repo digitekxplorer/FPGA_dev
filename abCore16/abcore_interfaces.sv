@@ -61,12 +61,22 @@ endinterface
 interface gpio_bus_if (input logic clk, input logic rst_n);
     logic [`DATA_WIDTH-1:0] data;
     logic                   wren;
+    logic                   mmio_rden;
 
     // View from the CPU (controller)
     modport cpu (
         output data,
-        output wren
+        output wren,
+        output mmio_rden
     );
+    
+    // View from the device (MMIO peripheral, i.e. UART)
+    modport peripheral (
+        input data,
+        input wren,
+        input mmio_rden
+    );
+       
 endinterface
 
 
@@ -92,15 +102,15 @@ endinterface
 // --- UART Interface ---
 interface uart_if (input logic clk, input logic rst_n);
     logic [7:0]  tx_data, rx_data;
-    logic        tx_start, reset_flags, tx_fifo_avail, rx_data_valid, rx_frame_error;
+    logic        tx_start, reset_flags, tx_fifo_avail, rx_fifo_avail, rx_frame_error, rx_fifo_prog_full;
     
     modport controller ( 
-        input clk, rst_n, tx_fifo_avail, rx_data, rx_data_valid, rx_frame_error, 
+        input clk, rst_n, tx_fifo_avail, rx_data, rx_fifo_avail, rx_frame_error, rx_fifo_prog_full,
         output tx_data, tx_start, reset_flags 
     );
     
     modport peripheral ( 
-        output tx_fifo_avail, rx_data, rx_data_valid, rx_frame_error, 
+        output tx_fifo_avail, rx_data, rx_fifo_avail, rx_frame_error, rx_fifo_prog_full,
         input clk, rst_n, tx_data, tx_start, reset_flags 
     );
 
