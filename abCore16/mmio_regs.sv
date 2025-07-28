@@ -37,6 +37,7 @@ module mmio_regs (
     // MMIO Read Data (This is an output *to* the dmem_bus mux in the top level)
     output logic [`DATA_WIDTH-1:0] mmio_rd_data_o,
     output logic                   mmio_rd_valid_o, 
+    output logic                   uart_rx_access_o,
     // LED Interface
     output logic [15:0] led_ctrl_o
 );
@@ -137,16 +138,17 @@ always_ff @(posedge clk or negedge rst_n) begin
         end 
         
         // Update UART status from UART interface
-//        reg_map.uart_status.tx_busy   <= uart_bus.tx_busy;
         reg_map.uart_status.tx_fifo_avail <= uart_bus.tx_fifo_avail;
         reg_map.uart_status.rx_error      <= uart_bus.rx_frame_error;
-        if (uart_bus.rx_data_valid) begin
+        reg_map.uart_status.rx_fifo_prog_full <= uart_bus.rx_fifo_prog_full;    // <<< NEW
+        
+        if (uart_bus.rx_fifo_avail) begin
             reg_map.uart_rx_data.data     <= uart_bus.rx_data;
-            reg_map.uart_status.rx_valid  <= 1'b1;
+            reg_map.uart_status.rx_data_avail  <= 1'b1;
             reg_map.uart_rx_data.reserved <= 8'h00;
         end
         if (reg_map.uart_ctrl.reset_flags) begin
-            reg_map.uart_status.rx_valid <= 1'b0;
+            reg_map.uart_status.rx_data_avail <= 1'b0;
             reg_map.uart_status.rx_error <= 1'b0;
         end
     end
@@ -155,14 +157,18 @@ end
 // Register read logic
 always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-        mmio_rd_data_o  <= 16'h0;
-        mmio_rd_valid_o <= 1'b0;
+        mmio_rd_data_o      <= 16'h0;
+        mmio_rd_valid_o     <= 1'b0;
+        uart_rx_access_o   <= 1'b0;
     end 
     else begin
         mmio_rd_valid_o <= mmio_rden;
+        uart_rx_access_o <= 1'b0;
         
         // The read case statement now uses the address from the dmem_bus interface
-        if (mmio_rden && memorymap_range) begin
+//        if (mmio_rden && memorymap_range) begin
+//        if (!dmem_bus.wren && memorymap_range) begin   // dmem_bus.wren
+        if (memorymap_range) begin
             case (dmem_bus.addr)
                 ADDRESS_TIMER_CTRL:     mmio_rd_data_o <= reg_map.timer_ctrl;
                 ADDRESS_TIMER_PRESCALE: mmio_rd_data_o <= reg_map.timer_prescale;
@@ -174,7 +180,10 @@ always_ff @(posedge clk or negedge rst_n) begin
                 ADDRESS_UART_CTRL:      mmio_rd_data_o <= reg_map.uart_ctrl;
                 ADDRESS_UART_STATUS:    mmio_rd_data_o <= reg_map.uart_status;
                 ADDRESS_UART_TX_DATA:   mmio_rd_data_o <= reg_map.uart_tx_data;
-                ADDRESS_UART_RX_DATA:   mmio_rd_data_o <= reg_map.uart_rx_data;
+                ADDRESS_UART_RX_DATA:   begin 
+                                           mmio_rd_data_o <= reg_map.uart_rx_data; 
+                                           uart_rx_access_o <= 1'b1;
+                                        end
                 ADDRESS_LED_CTRL:       mmio_rd_data_o <= reg_map.led_ctrl;
                 default:                mmio_rd_data_o <= 16'h0;
             endcase
