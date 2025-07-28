@@ -42,6 +42,8 @@ module cpu_tb;
     logic                   dut_rx_wire; // Connects to DUT's uart_rx_i
     
     logic                   tx_trigger_btn_o;
+    logic                   dut_uart_rx_access;
+//    logic                   dut_mmio_rden;
 
     // Testbench UART signals
     logic tb_uart_rst;
@@ -50,6 +52,7 @@ module cpu_tb;
     int   cycle_count = 0;
     logic test_passed = 1'b0;
     logic [`DATA_WIDTH-1:0] captured_gpio_out = 'x;
+   
 
     //================================================================
     // DUT Instantiation
@@ -86,14 +89,13 @@ module cpu_tb;
 `endif
 
     //================================================================
-    // Interface Instantiation for the Testbench's UART
+    // Interface Instantiation for the Testbench's UART and gpio
     //================================================================
     // This interface belongs to the testbench and will be connected to uart02.
     // It is driven by the testbench's clock and reset.
-    uart_if tb_uart_bus (
-        .clk(clk_12MHz), 
-        .rst_n(!tb_uart_rst)
-    );
+    uart_if tb_uart_bus ( .clk(clk_12MHz), .rst_n(!tb_uart_rst) );
+    
+    gpio_bus_if tb_gpio_bus ( .clk(clk_12MHz), .rst_n(!tb_uart_rst) );
 
     //================================================================
     // Testbench UART Driver Logic
@@ -103,9 +105,12 @@ module cpu_tb;
         // 1. Reset the testbench UART
         tb_uart_rst = 1'b1;
         // Drive signals inside the interface
-        tb_uart_bus.tx_data <= 'h59;
+        tb_uart_bus.tx_data  <= 'h59;
         tb_uart_bus.tx_start <= 1'b0;
-        tx_trigger_btn_o = 1'b0;
+        dut_uart_rx_access <= 1'b0;     // currently not used
+//        dut_mmio_rden        <= 1'b0;     // currently not used
+        tb_gpio_bus.mmio_rden <= 1'b0;     // currently not used
+        tx_trigger_btn_o      = 1'b0;
         repeat(5) @(posedge clk_12MHz);
         tb_uart_rst = 1'b0;
         
@@ -117,13 +122,24 @@ module cpu_tb;
 //    tx_trigger_btn_o = 1'b0;
     // *****************************
         
-        repeat(100) @(posedge clk_12MHz);   // wait for abCore16 setup
+        repeat(100) @(posedge clk_12MHz);   // wait for abCore16 setup  
         
+        tx_data_send('h59);
+        repeat(2) @(posedge clk_12MHz);
+        tx_data_send('h60);
+        repeat(2) @(posedge clk_12MHz);
+        tx_data_send('h61);
+        
+        repeat(2) @(posedge clk_12MHz);
+        tx_data_send('h62);
+        repeat(2) @(posedge clk_12MHz);
+        tx_data_send('h63);
+        repeat(2) @(posedge clk_12MHz);
+        tx_data_send('h64);
         // Start the transmission by asserting the start signal inside the interface
-        tb_uart_bus.tx_start <= 1'b1;      // send one single pulse
-//        repeat(2) @(posedge clk_12MHz);
-        @(posedge clk_12MHz);
-        tb_uart_bus.tx_start <= 1'b0;
+//        tb_uart_bus.tx_start <= 1'b1;      // send one single pulse
+//        @(posedge clk_12MHz);
+//        tb_uart_bus.tx_start <= 1'b0;
     end 
 
     //================================================================
@@ -131,8 +147,8 @@ module cpu_tb;
     //================================================================
     localparam CLK50_FREQ = 50_000_000;
     localparam UART_DATA_BITS = 8;
-    localparam BAUD_RATE = 9600;
-    //localparam BAUD_RATE = 115200;
+    //localparam BAUD_RATE = 9600;
+    localparam BAUD_RATE = 115200;
     uart_mn #(
           .CLK_FREQ(CLK50_FREQ),
           .DATA_BITS(UART_DATA_BITS),
@@ -140,12 +156,15 @@ module cpu_tb;
         ) uart02 (
         // No separate clk/rst, they come from the interface now
         .uart_bus          (tb_uart_bus.peripheral), // Connect the TB interface
-        .i_baud_divider    (16'b0),
         .i_tx_start_manual ('0), // Manual button not used by this instance
+        .i_uart_rx_access  (dut_uart_rx_access),
+//        .i_mmio_rden       (dut_mmio_rden),
+        .gpio_bus          (tb_gpio_bus.peripheral),    // gpio and mmio
         // Connect the physical pins to the wires going to the DUT
         .o_uart_tx         (dut_rx_wire),  // TB UART TX -> DUT RX
         .i_uart_rx         (dut_tx_wire)   // TB UART RX <- DUT TX
     );
+    
 
 
     // Main Test Sequence (remains the same)
@@ -193,7 +212,10 @@ module cpu_tb;
         $finish;
     end
 
-    // Testbench Tasks (remains the same)
+    //================================================================
+    // Testbench Tasks
+    //================================================================
+    // Display to console data on GPIO bus
     task monitor_gpio_out;
         while ( !halted_from_dut ) begin
             @(posedge dut.clk iff gpio_out_we_tb_o);
@@ -203,6 +225,19 @@ module cpu_tb;
             wait (gpio_out_we_tb_o === 1'b0);
             repeat (3) @(posedge dut.clk);
         end
+    endtask
+    
+    //
+    task tx_data_send(input [7:0] tx_data);
+        // Drive signals inside the interface
+        tb_uart_bus.tx_data <= tx_data;
+        
+        // Start the transmission by asserting the start signal inside the interface
+        tb_uart_bus.tx_start <= 1'b1;      // send one single pulse
+//        repeat(2) @(posedge clk_12MHz);
+        @(posedge clk_12MHz);
+        tb_uart_bus.tx_start <= 1'b0;
+
     endtask
 
 endmodule
