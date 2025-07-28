@@ -26,8 +26,10 @@ module uart_mn #(
     // i_clk and i_rst_n are accessed via the uart_bus interface.
     uart_if.peripheral       uart_bus,
     
-    input  logic [15:0]      i_baud_divider, 
     input  logic             i_tx_start_manual,
+    input  logic             i_uart_rx_access,     // Uart RX addr selected for access
+    gpio_bus_if.peripheral   gpio_bus,             // gpio and mmio interface
+//    input  logic             i_mmio_rden,          // memory read Rd = Mem[Rs_addr]
     output logic             o_uart_tx,
     input  logic             i_uart_rx
 );
@@ -46,10 +48,10 @@ module uart_mn #(
     logic       tx_fifo_wr_en;
     
     // RX FIFO signals
-    logic [7:0] rx_fifo_din;
+ //   logic [7:0] rx_fifo_din;
     logic       rx_fifo_empty;
     logic       rx_fifo_full;
-    logic       rx_fifo_rd_en;
+//    logic       rx_fifo_rd_en;
     logic       rx_fifo_wr_en;
     
     // TX Control signals
@@ -74,6 +76,12 @@ module uart_mn #(
     // remain free-running to catch the asynchronous start bit.    
     logic tx_busy_d1;
     logic tx_start_edge;
+    
+    // FSM signals
+    logic tx_fifo_rden_fsm;
+    
+    logic rx_fifo_prog_full;
+    
 
     // Detect the rising edge of o_tx_busy, which marks the start of a TX
     always_ff @(posedge uart_bus.clk or negedge uart_bus.rst_n) begin
@@ -107,6 +115,36 @@ module uart_mn #(
     // Check if data is available in TX FIFO
     assign tx_data_available = ~tx_fifo_empty;
     
+    // FIFO read enable: assert during READ_FIFO state
+//    assign tx_fifo_rd_en = (tx_state == TX_READ_FIFO) & tx_data_available;
+    assign tx_fifo_rd_en = tx_fifo_rden_fsm & tx_data_available;
+    
+    // TX start: use registered signal or manual start
+    // moved down where TX_IDLE is defined
+//    assign tx_start_internal = tx_fifo_rden_fsm | (i_tx_start_manual & (tx_state == TX_IDLE));
+    
+    // Connect interface outputs for TX status - indicate FIFO availability
+    assign uart_bus.tx_fifo_avail = ~tx_fifo_full;  // High when FIFO can accept data
+
+    // -- RX FIFO Control Logic --
+    // Write to RX FIFO when valid data is received and FIFO is not full
+    assign rx_fifo_wr_en = rx_data_valid_internal & ~rx_fifo_full;
+//    assign rx_fifo_din = rx_data_internal;
+    
+    // Read from RX FIFO is controlled by the interface
+ //   assign rx_fifo_rd_en = uart_bus.rx_fifo_avail & ~rx_fifo_empty;  // Assuming interface provides read enable
+    
+    // Connect interface outputs for RX
+    // assign uart_bus.rx_data = rx_fifo_empty ? 8'h00 : uart_bus.rx_data;  // You may want to connect FIFO output here
+    assign uart_bus.rx_fifo_avail = ~rx_fifo_empty;  // Data valid when FIFO not empty
+    assign uart_bus.rx_frame_error = rx_frame_error_internal;
+    
+    assign uart_bus.rx_fifo_prog_full = rx_fifo_prog_full;     // <<< NEW
+
+    // =================================
+    // TX UART
+    // =================================
+    
     // State machine for TX FIFO control
     typedef enum logic [1:0] {
         TX_IDLE,
@@ -116,7 +154,6 @@ module uart_mn #(
     } tx_state_t;
     
     tx_state_t tx_state;
-    logic tx_fifo_rden_fsm;
     
     always_ff @(posedge uart_bus.clk or negedge uart_bus.rst_n) begin
         if (!uart_bus.rst_n) begin
@@ -145,8 +182,7 @@ module uart_mn #(
                         tx_state <= TX_TRANSMIT;
                     end
                 end
-                
-                
+                               
                 TX_TRANSMIT: begin
                     if (!tx_busy_internal) begin
                         // Transmission complete, check for more data
@@ -161,54 +197,36 @@ module uart_mn #(
         end
     end
     
-    // FIFO read enable: assert during READ_FIFO state
-//    assign tx_fifo_rd_en = (tx_state == TX_READ_FIFO) & tx_data_available;
-    assign tx_fifo_rd_en = tx_fifo_rden_fsm & tx_data_available;
-    
     // TX start: use registered signal or manual start
     assign tx_start_internal = tx_fifo_rden_fsm | (i_tx_start_manual & (tx_state == TX_IDLE));
     
-    // Connect interface outputs for TX status - indicate FIFO availability
-    assign uart_bus.tx_fifo_avail = ~tx_fifo_full;  // High when FIFO can accept data
-
-    // -- RX FIFO Control Logic --
-    // Write to RX FIFO when valid data is received and FIFO is not full
-    assign rx_fifo_wr_en = rx_data_valid_internal & ~rx_fifo_full;
-    assign rx_fifo_din = rx_data_internal;
     
-    // Read from RX FIFO is controlled by the interface
-    assign rx_fifo_rd_en = uart_bus.rx_data_valid & ~rx_fifo_empty;  // Assuming interface provides read enable
-    
-    // Connect interface outputs for RX
-    // assign uart_bus.rx_data = rx_fifo_empty ? 8'h00 : uart_bus.rx_data;  // You may want to connect FIFO output here
-    assign uart_bus.rx_data_valid = ~rx_fifo_empty;  // Data valid when FIFO not empty
-    assign uart_bus.rx_frame_error = rx_frame_error_internal;
-
     // UART TX Fifo
+//    uart_fifo uart_tx_fifo (
+//        .clk    (uart_bus.clk),         // input wire clk
+//        .srst   (!uart_bus.rst_n),      // input wire srst
+//        .din    (uart_bus.tx_data),     // input wire [7 : 0] din
+//        .wr_en  (tx_fifo_wr_en),        // input wire wr_en
+//        .rd_en  (tx_fifo_rd_en),        // input wire rd_en
+//        .dout   (tx_fifo_dout),         // output wire [7 : 0] dout
+//        .full   (tx_fifo_full),         // output wire full
+//        .empty  (tx_fifo_empty)         // output wire empty
+//    );
+    
+    logic tx_fifo_prog_full;
     uart_fifo uart_tx_fifo (
-        .clk    (uart_bus.clk),         // input wire clk
-        .srst   (!uart_bus.rst_n),      // input wire srst
-        .din    (uart_bus.tx_data),     // input wire [7 : 0] din
-        .wr_en  (tx_fifo_wr_en),        // input wire wr_en
-        .rd_en  (tx_fifo_rd_en),        // input wire rd_en
-        .dout   (tx_fifo_dout),         // output wire [7 : 0] dout
-        .full   (tx_fifo_full),         // output wire full
-        .empty  (tx_fifo_empty)         // output wire empty
+        .clk       (uart_bus.clk),        // input wire clk
+        .srst      (!uart_bus.rst_n),     // input wire srst
+        .din       (uart_bus.tx_data),    // input wire [7 : 0] din
+        .wr_en     (tx_fifo_wr_en),       // input wire wr_en
+        .rd_en     (tx_fifo_rd_en),       // input wire rd_en
+        .dout      (tx_fifo_dout),        // output wire [7 : 0] dout
+        .full      (tx_fifo_full),        // output wire full
+        .empty     (tx_fifo_empty),       // output wire empty
+        .prog_full (tx_fifo_prog_full)    // output wire prog_full
     );
-
-    // UART RX Fifo
-    uart_fifo uart_rx_fifo (
-        .clk    (uart_bus.clk),         // input wire clk
-        .srst   (!uart_bus.rst_n),      // input wire srst
-        .din    (rx_fifo_din),          // input wire [7 : 0] din
-        .wr_en  (rx_fifo_wr_en),        // input wire wr_en
-        .rd_en  (rx_fifo_rd_en),        // input wire rd_en
-        .dout   (uart_bus.rx_data),     // output wire [7 : 0] dout - connected to interface
-        .full   (rx_fifo_full),         // output wire full
-        .empty  (rx_fifo_empty)         // output wire empty
-    );
-
-    // -- Instantiations --
+    
+    // UART instantiation
     uart_tx #(
         .DATA_BITS(DATA_BITS)
     ) tx_inst (
@@ -221,6 +239,90 @@ module uart_mn #(
         .i_baud_tick    (baud_tick_1x)
     );
 
+
+    // =================================
+    // RX UART
+    // =================================
+    logic rx_fifo_rden_fsm;
+    logic rx_data_valid_fsm;
+    logic [7:0] rx_fifo_dout;
+    
+    // State machine for RX FIFO control
+    typedef enum logic [1:0] {
+        RX_IDLE,
+        RX_READ_FIFO,
+        RX_DATA_VALID
+    } rx_state_t;
+    
+    rx_state_t rx_state;
+    
+    always_ff @(posedge uart_bus.clk or negedge uart_bus.rst_n) begin
+        if (!uart_bus.rst_n) begin
+            rx_state <= RX_IDLE;
+            rx_fifo_rden_fsm <= 1'b0;
+            rx_data_valid_fsm <= 1'b0;
+        end else begin
+            rx_fifo_rden_fsm <= 1'b0;  // Default
+            rx_data_valid_fsm <= 1'b0;  // Default
+            
+            case (rx_state)
+                RX_IDLE: begin
+//                    if (~rx_fifo_empty) begin
+                    // Is cpu accessing RX Uart Fifo with a read enable?
+                    // This means cpu read from the RX Uart Fifo
+                    // Use gpio_bus interface to access mmio_rden
+                    // timer_bus.prescale_en
+                    if (i_uart_rx_access && gpio_bus.mmio_rden) begin
+                        rx_state <= RX_READ_FIFO;
+                    end
+                end
+                
+                RX_READ_FIFO: begin
+                    // Read data from FIFO
+                    rx_fifo_rden_fsm <= 1'b1;
+                    rx_state <= RX_DATA_VALID;
+                end
+                
+                RX_DATA_VALID: begin
+                    // Data is now valid on the interface
+                    rx_data_valid_fsm <= 1'b1;
+                    rx_state <= RX_IDLE;  // Return to idle for next read
+                end
+            endcase
+        end
+    end
+    
+    // UART RX Fifo
+//    uart_fifo uart_rx_fifo (
+//        .clk    (uart_bus.clk),         // input wire clk
+//        .srst   (!uart_bus.rst_n),      // input wire srst
+//        //.din    (rx_fifo_din),          // input wire [7 : 0] din
+//        .din    (rx_data_internal),     // input wire [7 : 0] din
+//        .wr_en  (rx_fifo_wr_en),        // input wire wr_en
+//        //.rd_en  (rx_fifo_rd_en),        // input wire rd_en
+//        .rd_en  (rx_fifo_rden_fsm),        // input wire rd_en
+//        //.dout   (uart_bus.rx_data),     // output wire [7 : 0] dout - connected to interface
+//        .dout   (rx_fifo_dout),     // output wire [7 : 0] dout - connected to interface
+//        .full   (rx_fifo_full),         // output wire full
+//        .empty  (rx_fifo_empty)         // output wire empty
+//    );
+    
+    // logic rx_fifo_prog_full;
+    uart_fifo uart_rx_fifo (
+        .clk       (uart_bus.clk),       // input wire clk
+        .srst      (!uart_bus.rst_n),    // input wire srst
+        .din       (rx_data_internal),   // input wire [7 : 0] din
+        .wr_en     (rx_fifo_wr_en),      // input wire wr_en
+        .rd_en     (rx_fifo_rden_fsm),   // input wire rd_en
+        .dout      (rx_fifo_dout),       // output wire [7 : 0] dout
+        .full      (rx_fifo_full),       // output wire full
+        .empty     (rx_fifo_empty),      // output wire empty
+        .prog_full (rx_fifo_prog_full)   // output wire prog_full
+    );
+    
+    assign uart_bus.rx_data = rx_fifo_dout;
+    
+    // UART instantiation
     uart_rx #(
         .DATA_BITS(DATA_BITS)
     ) rx_inst (
@@ -232,4 +334,5 @@ module uart_mn #(
         .o_rx_frame_error (rx_frame_error_internal), // Connect to internal signal
         .i_baud_tick      (baud_tick_16x)
     );
+    
 endmodule
