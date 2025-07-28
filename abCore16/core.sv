@@ -26,11 +26,12 @@ module core (
     input  logic clk,
     input  logic rst_n,
 
-    // Interface Ports <<< UPDATED
+    // Interface Ports
     imem_bus_if.master imem_bus,
     dmem_bus_if.master dmem_bus,
     gpio_bus_if.cpu    gpio_bus,
-	
+	// CPU dmem read including mmio registers
+//	output logic      mmio_rden_o,          // memory read Rd = Mem[Rs_addr]
     // CPU halt flag
     output logic       halted_o
 );
@@ -47,21 +48,23 @@ module core (
     logic [`ADDR_WIDTH-1:0] dmem_addr_o;    // From datapath
     logic [`DATA_WIDTH-1:0] dmem_wdata_o;   // From datapath
     logic [`DATA_WIDTH-1:0] dmem_rdata_i;   // To datapath
-    // --- GPIO Interface ---
+    // --- GPIO and MMIO Interface ---
     logic [`DATA_WIDTH-1:0] gpio_out_o;     // From datapath
     logic                   gpio_out_we_o;  // From control unit
+    logic                   mmio_rden_o;    // memory read Rd = Mem[Rs_addr]
 
     // --- Connect Interfaces to Internal Wires <<< NEW SECTION ---
     // This logic bridges the gap between the external interfaces and the
     // internal modules, which still use discrete wire connections.
 
     // Connect outputs from the core TO the interfaces
-    assign imem_bus.addr  = imem_addr_o;
-    assign dmem_bus.wren  = dmem_we_o;
-    assign dmem_bus.addr  = dmem_addr_o;
-    assign dmem_bus.wdata = dmem_wdata_o;
-    assign gpio_bus.data  = gpio_out_o;
-    assign gpio_bus.wren  = gpio_out_we_o;
+    assign imem_bus.addr      = imem_addr_o;
+    assign dmem_bus.wren      = dmem_we_o;
+    assign dmem_bus.addr      = dmem_addr_o;
+    assign dmem_bus.wdata     = dmem_wdata_o;
+    assign gpio_bus.data      = gpio_out_o;
+    assign gpio_bus.wren      = gpio_out_we_o;
+    assign gpio_bus.mmio_rden = mmio_rden_o;
 
     // Connect inputs TO the core FROM the interfaces
     assign imem_rdata_i = imem_bus.rdata;
@@ -176,6 +179,7 @@ module core (
         .alu_src_a_sel_out(alu_src_a_sel_to_dp),
         .alu_src_b_sel_out(alu_src_b_sel_to_dp),
         .dmem_write_en_out(dmem_write_en_to_dp),
+        .mmio_rden_out(mmio_rden_o),
         .dmem_addr_sel_out(dmem_addr_sel_to_dp),
         .dmem_data_sel_out(dmem_data_sel_to_dp),
         .sp_op_inc_out(sp_op_inc_to_dp),
