@@ -93,8 +93,10 @@ logic [`DATA_WIDTH-1:0] dmem_bram_rdata_i; // Renamed to distinguish from interf
 
 logic [15:0] mmio_rd_data;
 logic        mmio_rd_valid;
+logic        uart_rx_access;
 logic        memorymap_range;
 logic        tx_start_btn;
+//logic        mmio_rden;
 // LED control signal
 logic [15:0] led_ctrl;
 // clock and reset
@@ -198,6 +200,7 @@ core core01 (
     .imem_bus  (imem_bus.master),  // instruction bus interface
     .dmem_bus  (dmem_bus.master),  // data bus interface
     .gpio_bus  (gpio_bus.cpu),     // gpio bus interface
+//    .mmio_rden_o (mmio_rden),      // memory read Rd = Mem[Rs_addr]
     .halted_o  (halted_o)
 );
 
@@ -212,6 +215,7 @@ mmio_regs mmio_regs01 (
     .memorymap_range        (memorymap_range),
     .mmio_rd_data_o         (mmio_rd_data),
     .mmio_rd_valid_o        (mmio_rd_valid),
+    .uart_rx_access_o       (uart_rx_access),
     .led_ctrl_o             (led_ctrl)
 );
 
@@ -230,8 +234,10 @@ uart_mn #(
     .BAUD_RATE(BAUD_RATE)
 ) uart01 (
     .uart_bus          (uart_bus.peripheral),   // uart interface
-    .i_baud_divider    (16'b0),
     .i_tx_start_manual (tx_start_btn),
+    .i_uart_rx_access  (uart_rx_access),
+//    .i_mmio_rden       (mmio_rden),            // memory read Rd = Mem[Rs_addr]
+    .gpio_bus          (gpio_bus.peripheral),    // gpio and mmio
     .o_uart_tx         (uart_tx_o),
     .i_uart_rx         (uart_rx_sync)
 );
@@ -381,7 +387,7 @@ end
 logic [31:0] probe0;
 // The ILA probe uses the dmem_bus interface signals
 assign probe0[31:0] = { dmem_bus.addr[8:0], uart_bus.rx_data, uart_bus.tx_data, uart_tx_o, uart_rx_sync, 
-                        uart_bus.tx_start, 1'b0, uart_bus.rx_data_valid,
+                        uart_bus.tx_start, 1'b0, uart_bus.rx_fifo_avail,
                         dmem_bus.wren, led3_o };
 
 ila_0 ab_ILA (
