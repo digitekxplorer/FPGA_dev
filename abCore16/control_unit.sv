@@ -59,6 +59,7 @@ module control_unit (
     output logic       alu_src_b_sel_out,
     // Data Memory Control
     output logic       dmem_write_en_out,
+    output logic       mmio_rden_out,        // Rd = Mem[Rs_addr]
     output logic [1:0] dmem_addr_sel_out,
     output logic [1:0] dmem_data_sel_out,
     // Stack Pointer Control
@@ -88,6 +89,8 @@ module control_unit (
     logic [7:0] ir_operand4_reg; // Holds byte 4 of instruction
     
     logic       gpio_out_we;
+    
+    logic       mmio_rden;
 
     //================================================================
     // FSM State Definition
@@ -270,6 +273,7 @@ module control_unit (
         rf_src1_addr_out = '0; rf_src2_addr_out = '0; rf_write_data_sel_out = `WB_SRC_ALU;
         imm_val_to_dp_out = '0; alu_op_out = `ALU_NOP; alu_src_a_sel_out = `ALU_A_SRC_REG; 
         alu_src_b_sel_out = `ALU_B_SRC_REG; dmem_write_en_out = 1'b0; 
+        mmio_rden = 1'b0;
         dmem_addr_sel_out = `DMEM_ADDR_SRC_IMM; dmem_data_sel_out = `DMEM_DATA_SRC_RF1;
         sp_op_inc_out = 1'b0; sp_op_dec_out = 1'b0; flags_write_en_out = 1'b0;
         gpio_out_we = 1'b0;
@@ -630,6 +634,8 @@ module control_unit (
                             alu_op_out=`ALU_PASS_A;                // [Rs_addr]
                             alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs
                             rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+                            // <<< NEW
+                            mmio_rden = 1'b1;               // read from dmem including mmio registers
                         end
                         // July 11, 2025; fix for pointers
                         else if(current_state==S_MEM_ACCESS) begin  
@@ -672,6 +678,19 @@ module control_unit (
                 endcase
             end
         endcase
+    end
+    
+    // Register the mmio_rden_out output and align to data
+    // Function: Rd = Mem[Rs_addr]
+    logic  mmio_rden_r;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            mmio_rden_out   <= 1'b0;
+            mmio_rden_r     <= 1'b0;
+        end else begin
+            mmio_rden_r     <= mmio_rden;
+            mmio_rden_out   <= mmio_rden_r;
+        end
     end
     
 
