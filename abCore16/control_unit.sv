@@ -17,6 +17,7 @@
 // Dependencies: `defines.svh`
 // 
 // Revision:
+// Revision 1.1 - Added byte-access instructions: LOADB, STORB, LOADIB, STORIB
 // Revision 1.0 - Created to be compatible with the reverted DP-centric datapath.
 //
 //////////////////////////////////////////////////////////////////////////////////
@@ -60,8 +61,11 @@ module control_unit (
     // Data Memory Control
     output logic       dmem_write_en_out,
     output logic       mmio_rden_out,        // Rd = Mem[Rs_addr]
+    output logic       dmem_byt_rden_out,    // data memory byte read
+    output logic       dmem_byt_wrflg_out,    // data memory byte write
     output logic [1:0] dmem_addr_sel_out,
     output logic [1:0] dmem_data_sel_out,
+//    output logic       dmem_byte_en_out,     // NEW: Enable byte access mode
     // Stack Pointer Control
     output logic       sp_op_inc_out,
     output logic       sp_op_dec_out,
@@ -86,11 +90,13 @@ module control_unit (
     logic [7:0] ir_operand1_reg; // Holds byte 2 of instruction
     logic [7:0] ir_operand2_reg; // Holds byte 3 of instruction
     logic [7:0] ir_operand3_reg; // Holds byte 4 of instruction
-    logic [7:0] ir_operand4_reg; // Holds byte 4 of instruction
+    logic [7:0] ir_operand4_reg; // Holds byte 5 of instruction
     
     logic       gpio_out_we;
     
     logic       mmio_rden;
+    
+//    logic       dmem_byte_en_out;     // NEW: Enable byte access mode
 
     //================================================================
     // FSM State Definition
@@ -123,13 +129,14 @@ module control_unit (
         total_instr_bytes = 3'd1;
         case(ir_opcode_reg)
             // 5-byte instructions
-            `OP_LOADFR, `OP_STORFR: total_instr_bytes = 3'd5;
+            `OP_LOADFR, `OP_STORFR, `OP_LOADBFR, `OP_STORBFR: total_instr_bytes = 3'd5;
             // 4-byte instructions
-            `OP_LOAD, `OP_STORE, `OP_LOADM, `OP_INM, `OP_OUTM, `OP_JMPZ, `OP_JMPN, `OP_L_AND, `OP_L_OR: total_instr_bytes = 3'd4;
+            `OP_LOAD, `OP_STORE, `OP_LOADM, `OP_INM, `OP_OUTM, `OP_JMPZ, `OP_JMPN, `OP_L_AND, `OP_L_OR,
+            `OP_LOADB, `OP_STORB: total_instr_bytes = 3'd4;
             // 3-byte instructions
             `OP_ADD, `OP_SUB, `OP_MUL, `OP_AND, `OP_OR, `OP_XOR, `OP_CMP, `OP_MOV, `OP_SHL, `OP_SHR,
             `OP_JMP, `OP_JE, `OP_JNE, `OP_JS, `OP_JNS, `OP_JC, `OP_JNC, `OP_JO, `OP_JNO, `OP_CALL,
-            `OP_LOADI, `OP_STORI, `OP_L_NOT: total_instr_bytes = 3'd3;
+            `OP_LOADI, `OP_STORI, `OP_L_NOT, `OP_LOADIB, `OP_STORIB: total_instr_bytes = 3'd3;
             // 2-byte instructions
             `OP_INC, `OP_DEC, `OP_NOT, `OP_INP, `OP_OUT, `OP_PUSH, `OP_POP, `OP_MOVFRSP, `OP_MOVTOSP: total_instr_bytes = 3'd2;
             // 1-byte instructions
@@ -201,8 +208,9 @@ module control_unit (
             
             S_EXECUTE:
                 case (ir_opcode_reg)
-                    `OP_LOADM, `OP_POP, `OP_INM: next_state = S_MEM_ACCESS;
-                    `OP_STORE, `OP_STORI, `OP_PUSH, `OP_CALL, `OP_OUTM: next_state = S_MEM_ACCESS;
+                    `OP_LOADM, `OP_POP, `OP_INM, `OP_LOADB, `OP_LOADIB: next_state = S_MEM_ACCESS;
+                    `OP_LOADBFR, `OP_STORBFR: next_state = S_MEM_ACCESS;
+                    `OP_STORE, `OP_STORI, `OP_PUSH, `OP_CALL, `OP_OUTM, `OP_STORB, `OP_STORIB: next_state = S_MEM_ACCESS;
                     `OP_RET, `OP_STORFR: next_state = S_MEM_ACCESS;
                     `OP_LOADI: next_state = S_MEM_ACCESS;           // July 11, 2025; fix for pointers
 //                    `OP_LOADI: next_state = S_WRITEBACK;
@@ -232,8 +240,10 @@ module control_unit (
                 
             S_MEM_ACCESS:
                 case (ir_opcode_reg)
-                    `OP_LOADM, `OP_LOADI, `OP_POP, `OP_INM: next_state = S_WRITEBACK;
+                    `OP_LOADM, `OP_LOADI, `OP_LOADB, `OP_LOADIB, `OP_POP, `OP_INM: next_state = S_WRITEBACK;
                     `OP_LOADFR: next_state = S_WRITEBACK;                                    // TODO: check
+                    `OP_LOADBFR: next_state = S_WRITEBACK;  // NEW: Added byte load instructions
+					`OP_LOADFR: next_state = S_WRITEBACK;  
                     `OP_RET: next_state = S_PCWREN;
                     default: next_state = S_FETCH_OPCODE;
                 endcase
@@ -273,8 +283,9 @@ module control_unit (
         rf_src1_addr_out = '0; rf_src2_addr_out = '0; rf_write_data_sel_out = `WB_SRC_ALU;
         imm_val_to_dp_out = '0; alu_op_out = `ALU_NOP; alu_src_a_sel_out = `ALU_A_SRC_REG; 
         alu_src_b_sel_out = `ALU_B_SRC_REG; dmem_write_en_out = 1'b0; 
-        mmio_rden = 1'b0;
+        mmio_rden = 1'b0;  dmem_byt_rden_out = 1'b0; dmem_byt_wrflg_out = 1'b0;
         dmem_addr_sel_out = `DMEM_ADDR_SRC_IMM; dmem_data_sel_out = `DMEM_DATA_SRC_RF1;
+//        dmem_byte_en_out = 1'b0;  // NEW: Default to word access
         sp_op_inc_out = 1'b0; sp_op_dec_out = 1'b0; flags_write_en_out = 1'b0;
         gpio_out_we = 1'b0;
 
@@ -300,57 +311,6 @@ module control_unit (
                 // The first operand is always the destination
                 rf_dest_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];
                 
-                
-//                case(ir_opcode_reg)
-//                    `OP_MOV: begin
-//                        rf_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
-//                        rf_src2_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0]; // Not used, but ok
-//                    end 
-//                    `OP_L_AND, `OP_L_OR: begin
-//                        rf_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
-//                        rf_src2_addr_out = ir_operand3_reg[`REG_ADDR_WIDTH-1:0];
-//                    end
-//                    `OP_L_NOT: begin
-//                         rf_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
-//                         rf_src2_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0]; // Not used
-//                    end
-
-//                    // FIX: Specific routing for LOADFR
-//                    `OP_LOADFR: begin // Rd, R_base, #off16
-//                        // Read R_base (Op2) for ALU 'A' input
-//                        rf_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
-//                        rf_src2_addr_out = '0; // Not used
-//                    end
-
-//                    // FIX: Specific routing for STORFR
-//                    `OP_STORFR: begin // Rt, R_base, #off16
-//                        // Read R_base (Op2) for ALU 'A' input
-//                        rf_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
-//                        // Read Rt (Op1) for data memory write data
-//                        rf_src2_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];
-//                    end
-
-//                    // FIX: Specific routing for LOADI
-//                    `OP_LOADI: begin // Rd, Rs_addr
-//                        // Read Rs_addr (Op2) for ALU 'A' input (to pass to dmem addr)
-//                        rf_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
-//                        rf_src2_addr_out = '0; // Not used
-//                    end
-
-//                    // FIX: Specific routing for STORI
-//                    `OP_STORI: begin // Rt_val, Rs_addr
-//                        // Read Rs_addr (Op2) for ALU 'A' input (to pass to dmem addr)
-//                        rf_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
-//                        // Read Rt_val (Op1) for data memory write data
-//                        rf_src2_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];
-//                    end
-
-//                    default: begin // Default for ADD, SUB, etc.
-//                        rf_src1_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];
-//                        rf_src2_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
-//                    end
-//                endcase
-                
                 case(ir_opcode_reg)
                     `OP_MOV: begin
                         rf_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];     // write to different reg
@@ -360,7 +320,7 @@ module control_unit (
                         rf_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];     // write to different reg
                         rf_src2_addr_out = ir_operand3_reg[`REG_ADDR_WIDTH-1:0];
                     end
-                    `OP_STORFR, `OP_LOADFR, `OP_STORI, `OP_LOADI: begin
+                    `OP_STORFR, `OP_LOADFR, `OP_STORI, `OP_LOADI, `OP_STORB, `OP_LOADB, `OP_STORIB, `OP_LOADIB, `OP_STORBFR, `OP_LOADBFR: begin
                         rf_src1_addr_out = ir_operand2_reg[`REG_ADDR_WIDTH-1:0];
                         rf_src2_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];
                     end 
@@ -373,13 +333,13 @@ module control_unit (
                 
                 // Assemble immediate value based on instruction type
                 case(ir_opcode_reg)
-                    `OP_LOAD, `OP_LOADM, `OP_STORE, `OP_INM, `OP_OUTM, `OP_JMPZ, `OP_JMPN: 
+                    `OP_LOAD, `OP_LOADM, `OP_STORE, `OP_INM, `OP_OUTM, `OP_JMPZ, `OP_JMPN, `OP_LOADB, `OP_STORB: 
                         imm_val_to_dp_out = {ir_operand3_reg, ir_operand2_reg};
                     `OP_JMP, `OP_JE, `OP_JNE, `OP_JS, `OP_JNS, `OP_JC, `OP_JNC, `OP_JO, `OP_JNO, `OP_CALL: 
                         imm_val_to_dp_out = {ir_operand2_reg, ir_operand1_reg};
                     `OP_SHL, `OP_SHR: 
                         imm_val_to_dp_out = {{8{ir_operand2_reg[7]}}, ir_operand2_reg}; // Sign-extend Imm8
-                    `OP_STORFR, `OP_LOADFR: 
+                    `OP_STORFR, `OP_LOADFR, `OP_STORBFR, `OP_LOADBFR: 
                         imm_val_to_dp_out = {ir_operand4_reg, ir_operand3_reg};
                     default: 
                         imm_val_to_dp_out = '0;
@@ -452,7 +412,7 @@ module control_unit (
                         if(current_state==S_EXECUTE && branch_condition_met) begin 
                             pc_write_en_out=1'b1; 
                             pc_src_sel_out=`PC_SRC_IMM; 
-                        end
+                        end 
                     
                     `OP_STORE: if(current_state==S_EXECUTE)   begin
                                    // nothing to do
@@ -460,23 +420,7 @@ module control_unit (
                                else if(current_state==S_MEM_ACCESS) begin 
                                    dmem_write_en_out=1'b1; 
                                    dmem_addr_sel_out=`DMEM_ADDR_SRC_IMM; 
-                               end 
-
-                    // During CALL instruction, we have to write the return address to the stack.
-                    `OP_CALL: if(current_state==S_EXECUTE)   begin
-                                   pc_write_en_out=1'b1; 
-                                   pc_src_sel_out=`PC_SRC_IMM; 
-                                   // rtn addr
-                                   dmem_data_sel_out = `DMEM_DATA_SRC_PC;   // for rtn addr
-                                   dmem_write_en_out=1'b1; 
-                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
-                               end
-                               else if(current_state==S_MEM_ACCESS) begin  
-                                   pc_src_sel_out=`PC_SRC_PC_CURRENT;       // don't increment PC
-                                   pc_write_en_out=1'b1;
-                                   ir_opcode_load_en = 1'b1;                // load new opcode
-                                   sp_op_dec_out=1'b1;
-                               end               
+                               end            
                     
                     `OP_LOADM: if(current_state==S_EXECUTE)   begin
                                    // nothing to do
@@ -487,6 +431,30 @@ module control_unit (
                                else if(current_state==S_WRITEBACK) begin 
                                    rf_write_en_out=1'b1; 
                                    rf_write_data_sel_out=`WB_SRC_MEM; 
+                               end
+
+                    // NEW: STORB - Store byte to memory address  
+                    `OP_STORB: if(current_state==S_EXECUTE)   begin
+                                   // nothing to do
+                               end
+                               else if(current_state==S_MEM_ACCESS) begin 
+                                   dmem_write_en_out=1'b1; 
+                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_IMM; 
+//                                   dmem_byte_en_out=1'b1;                   // Enable byte access
+                               end 
+
+                    // NEW: LOADB - Load byte from memory address
+                    `OP_LOADB: if(current_state==S_EXECUTE)   begin
+                                   // nothing to do
+                               end
+                               else if(current_state==S_MEM_ACCESS) begin  
+                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_IMM; 
+//                                   dmem_byte_en_out=1'b1;                   // Enable byte access
+                               end
+                               else if(current_state==S_WRITEBACK) begin 
+                                   rf_write_en_out=1'b1; 
+                                   rf_write_data_sel_out=`WB_SRC_MEM; 
+//                                   dmem_byte_en_out=1'b1;                   // Enable byte access
                                end
 
                     `OP_PUSH: if(current_state==S_EXECUTE)   begin 
@@ -508,7 +476,23 @@ module control_unit (
                                   rf_write_en_out=1'b1; 
                                   rf_write_data_sel_out=`WB_SRC_MEM; 
                               end
-                    
+
+                    // During CALL instruction, we have to write the return address to the stack.
+                    `OP_CALL: if(current_state==S_EXECUTE)   begin
+                                   pc_write_en_out=1'b1; 
+                                   pc_src_sel_out=`PC_SRC_IMM; 
+                                   // rtn addr
+                                   dmem_data_sel_out = `DMEM_DATA_SRC_PC;   // for rtn addr
+                                   dmem_write_en_out=1'b1; 
+                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
+                               end
+                               else if(current_state==S_MEM_ACCESS) begin  
+                                   pc_src_sel_out=`PC_SRC_PC_CURRENT;       // don't increment PC
+                                   pc_write_en_out=1'b1;
+                                   ir_opcode_load_en = 1'b1;                // load new opcode
+                                   sp_op_dec_out=1'b1;
+                               end 
+
                     `OP_RET:  if(current_state==S_EXECUTE) begin 
                                   sp_op_inc_out=1'b1; 
                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_SP; 
@@ -529,25 +513,6 @@ module control_unit (
                               end                 
 
                     // 4 operand instructions (or 5 total bytes)
-                    
-//                    `OP_LOADFR: begin
-//                        // These signals are needed across multiple states to calculate address
-//                        // These signals are needed across S_EXECUTE and S_MEM_ACCESS
-//                        dmem_addr_sel_out = `DMEM_ADDR_SRC_ALU;
-//                        alu_op_out = `ALU_ADD;
-//                        alu_src_a_sel_out = `ALU_A_SRC_REG;
-//                        alu_src_b_sel_out = `ALU_B_SRC_IMM;
-//                        rf_write_data_sel_out = `WB_SRC_MEM;
-                    
-//                        // This signal is asserted ONLY in the final state
-//                        if (current_state == S_WRITEBACK) begin
-//                            // write to Register File
-//                            rf_write_en_out = 1'b1;
-//                        end
-//                    end
-                    
-                    
-                    
                     `OP_LOADFR: 
                         if(current_state==S_EXECUTE) begin 
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
@@ -573,40 +538,6 @@ module control_unit (
                             rf_write_en_out=1;                     // write to Rd
                         end
                         
-//                    `OP_LOADFR: 
-//                        if(current_state==S_EXECUTE) begin 
-//                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
-//                            alu_op_out=`ALU_ADD;                   // [R_base + IMM]
-//                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
-//                            alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
-//                            rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
-//                        end
-//                        else if(current_state==S_WRITEBACK) begin 
-//                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
-//                            alu_op_out=`ALU_ADD;                   // [R_base + IMM]
-//                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
-//                            alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
-//                            rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
-//                            // write to Register File
-//                            rf_write_en_out=1;                     // write to Rd
-//                        end
-
-
-// Gemini update
-//                        `OP_STORFR: begin
-//                            // These signals are needed across S_EXECUTE and S_MEM_ACCESS
-//                            dmem_addr_sel_out = `DMEM_ADDR_SRC_ALU;
-//                            alu_op_out = `ALU_ADD;
-//                            alu_src_a_sel_out = `ALU_A_SRC_REG;
-//                            alu_src_b_sel_out = `ALU_B_SRC_IMM;
-//                            dmem_data_sel_out = `DMEM_DATA_SRC_RF2;
-                        
-//                            // This signal is asserted ONLY in the memory access state
-//                            if (current_state == S_MEM_ACCESS) begin
-//                                dmem_write_en_out = 1'b1;
-//                            end
-//                        end
-                        
                     `OP_STORFR: 
                         if(current_state==S_EXECUTE) begin 
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
@@ -626,6 +557,59 @@ module control_unit (
                             // write to DMEM
                             dmem_write_en_out=1'b1;                // write to dmem
                         end
+                        
+                    // NEW: LOADBFR - Load byte frame-relative: Rd = Mem[R_base + off16] (byte access)
+                    `OP_LOADBFR: 
+                        if(current_state==S_EXECUTE) begin 
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
+                            alu_op_out=`ALU_ADD;                   // [R_base + IMM]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
+                            alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
+                            rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+//                            dmem_byte_en_out=1'b1;                 // Enable byte access
+                        end
+                        else if(current_state==S_MEM_ACCESS) begin 
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
+                            alu_op_out=`ALU_ADD;                   // [R_base + IMM]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
+                            alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
+                            rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+//                            dmem_byte_en_out=1'b1;                 // Enable byte access
+                        end
+                        else if(current_state==S_WRITEBACK) begin 
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
+                            alu_op_out=`ALU_ADD;                   // [R_base + IMM]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
+                            alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
+                            rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+//                            dmem_byte_en_out=1'b1;                 // Enable byte access
+                            // write to Register File
+                            rf_write_en_out=1;                     // write to Rd
+                        end
+                        
+                    // NEW: STORBFR - Store byte frame-relative: Mem[R_base + off16] = Rt (byte access)
+                    `OP_STORBFR: 
+                        if(current_state==S_EXECUTE) begin 
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
+                            alu_op_out=`ALU_ADD;                   // [R_base + IMM]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
+                            alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
+                            // data out to DMEM
+                            dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt
+//                            dmem_byte_en_out=1'b1;                 // Enable byte access
+                        end
+                        else if(current_state==S_MEM_ACCESS) begin 
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
+                            alu_op_out=`ALU_ADD;                   // [R_base + IMM]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
+                            alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
+                            // data out to DMEM
+                            dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt
+//                            dmem_byte_en_out=1'b1;                 // Enable byte access
+                            // write to DMEM
+                            dmem_write_en_out=1'b1;                // write to dmem
+                        end                        
+                        
                         
                     // Rd = Mem[Rs_addr]
                     `OP_LOADI: 
@@ -673,6 +657,59 @@ module control_unit (
                             // write to DMEM
                             dmem_write_en_out=1'b1;                // write to dmem
                         end
+                     
+                    // NEW: LOADIB - Load byte indirect: Rd = Mem[Rs_addr] (byte access)
+                    `OP_LOADIB: 
+                        if(current_state==S_EXECUTE) begin 
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
+                            alu_op_out=`ALU_PASS_A;                // [Rs_addr]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs
+                            rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+                            dmem_byt_rden_out=1'b1;                // data memory byte read
+//                            dmem_byte_en_out=1'b1;                 // Enable byte access
+                            mmio_rden = 1'b1;                      // read from dmem including mmio registers
+                        end
+                        else if(current_state==S_MEM_ACCESS) begin  
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
+                            alu_op_out=`ALU_PASS_A;                // [Rs_addr]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs
+                            rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+                            dmem_byt_rden_out=1'b1;                // data memory byte read
+//                            dmem_byte_en_out=1'b1;                 // Enable byte access
+                        end
+                        else if(current_state==S_WRITEBACK) begin 
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
+                            alu_op_out=`ALU_PASS_A;                // [Rs_addr]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs
+                            rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+                            dmem_byt_rden_out=1'b1;                // data memory byte read
+//                            dmem_byte_en_out=1'b1;                 // Enable byte access
+                            // write to Register File
+                            rf_write_en_out=1;                     // write to Rd
+                        end
+                        
+                    // NEW: STORIB - Store byte indirect: Mem[Rs_addr] = Rt_val (byte access)
+                    `OP_STORIB: 
+                        if(current_state==S_EXECUTE) begin 
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;  // alu_result_internal
+                            alu_op_out=`ALU_PASS_A;                // [Rs_addr]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs_addr
+                            // data out to DMEM
+                            dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt_val
+                            dmem_byt_wrflg_out=1'b1;                // data memory byte read
+//                            dmem_byte_en_out=1'b1;                 // Enable byte access
+                        end
+                        else if(current_state==S_MEM_ACCESS) begin 
+                            dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;  // alu_result_internal
+                            alu_op_out=`ALU_PASS_A;                // [Rs_addr]
+                            alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs_addr
+                            // data out to DMEM
+                            dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt_val
+                            dmem_byt_wrflg_out=1'b1;                // data memory byte read
+//                            dmem_byte_en_out=1'b1;                 // Enable byte access
+                            // write to DMEM
+                            dmem_write_en_out=1'b1;                // write to dmem
+                        end 
                                               
                     // Add all other instructions... this is a simplified example.
                 endcase
@@ -704,6 +741,13 @@ module control_unit (
 //STORFR	Rt, R_base, #off16	0x05	Store Frame-Relative: Stores the value from Rt to memory at address [R_base + signed_offset]. Used for accessing stack variables.
 //LOADI	    Rd, Rs_addr	        0x06	Load Indirect: Loads a value from the memory address specified in Rs_addr and places it into Rd. Rd = Mem[Rs_addr].
 //STORI	    Rt_val, Rs_addr     0x07	Store Indirect: Stores the value from Rt_val into memory at the address specified in Rs_addr. Mem[Rs_addr] = Rt_val.
+// Byte access
+//LOADB     Rd, addr16          0x08    Load Byte: Loads an 8-bit value from the specified memory address into Rd (zero-extended).
+//STORB     Rs, addr16          0x09    Store Byte: Stores the low 8 bits of Rs to the specified memory address.
+//LOADIB    Rd, Rs_addr         0x0A    Load Byte Indirect: Loads an 8-bit value from the memory address specified in Rs_addr into Rd (zero-extended).
+//STORIB    Rt_val, Rs_addr     0x0B    Store Byte Indirect: Stores the low 8 bits of Rt_val to the memory address specified in Rs_addr.
+//LOADBFR	Rd, R_base, #off16	0x04	Load Frame-Relative: Loads an 8-bit value from memory at address [R_base + signed_offset] into Rd. From stack location.
+//STORBFR	Rt, R_base, #off16	0x05	Store Frame-Relative: Stores the 8-bit value from Rt to memory at address [R_base + signed_offset]. To stack location.
 
     
     //================================================================
@@ -724,8 +768,6 @@ module control_unit (
         end else begin
             if (ir_opcode_load_en) begin  ir_opcode_reg   <= imem_rdata_i; end
             if (ir_operand1_load_en) begin ir_operand1_reg <= imem_rdata_i; end
-//            if ( total_instr_bytes == 3'd4 ) begin 
-//            end
             // currently, there are two 5-byte instructions: OP_LOADFR and OP_STORFR
             if ( total_instr_bytes == 3'd5 ) begin
                 if (ir_operand2_load_en_dly) begin ir_operand2_reg <= imem_rdata_i; end  // dly needed for BRAM latency
@@ -770,14 +812,6 @@ module control_unit (
     //================================================================
     // Register Output Signals
     //================================================================
-//    always_ff @(posedge clk or negedge rst_n) begin
-//        if (!rst_n) begin 
-//            gpio_out_we_out <= 1'b0;
-//        end
-//        else begin
-//            gpio_out_we_out <= gpio_out_we;
-//        end    
-//    end
     
     assign gpio_out_we_out = gpio_out_we;
 
@@ -789,17 +823,5 @@ module control_unit (
         if (!rst_n) halted_o <= 1'b0;
         else        halted_o <= (current_state == S_HALTED);
     end
-
-    // Signal used in testbench to check outputs
-    // Rising edge detector
-//    logic      halted_o_r;
-//    always_ff @(posedge clk or negedge rst_n) begin
-//        if (!rst_n) begin
-//            halted_o_r       <= 1'b0;
-//        end
-//        else begin
-//            halted_o_r       <= halted_o;
-//        end
-//    end
 
 endmodule
