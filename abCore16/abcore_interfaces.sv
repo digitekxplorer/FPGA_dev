@@ -1,3 +1,4 @@
+`timescale 1ns / 1ps
 // ---------------------------------------------------------------------------
 // File: abcore_interfaces.sv
 // Engineer: Al Baeza
@@ -62,19 +63,25 @@ interface gpio_bus_if (input logic clk, input logic rst_n);
     logic [`DATA_WIDTH-1:0] data;
     logic                   wren;
     logic                   mmio_rden;
+    logic                   dmem_byt_rden;
+    logic                   dmem_byt_wrflg;
 
     // View from the CPU (controller)
     modport cpu (
         output data,
         output wren,
-        output mmio_rden
+        output mmio_rden,
+        output dmem_byt_rden,
+        output dmem_byt_wrflg
     );
     
     // View from the device (MMIO peripheral, i.e. UART)
     modport peripheral (
         input data,
         input wren,
-        input mmio_rden
+        input mmio_rden,
+        input dmem_byt_rden,
+        input dmem_byt_wrflg
     );
        
 endinterface
