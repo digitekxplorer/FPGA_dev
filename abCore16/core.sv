@@ -52,6 +52,8 @@ module core (
     logic [`DATA_WIDTH-1:0] gpio_out_o;     // From datapath
     logic                   gpio_out_we_o;  // From control unit
     logic                   mmio_rden_o;    // memory read Rd = Mem[Rs_addr]
+    logic                   dmem_byt_rden_o;  // data memory byte read
+    logic                   dmem_byt_wrflg_o;  // data memory byte write
 
     // --- Connect Interfaces to Internal Wires <<< NEW SECTION ---
     // This logic bridges the gap between the external interfaces and the
@@ -65,6 +67,9 @@ module core (
     assign gpio_bus.data      = gpio_out_o;
     assign gpio_bus.wren      = gpio_out_we_o;
     assign gpio_bus.mmio_rden = mmio_rden_o;
+    
+    assign gpio_bus.dmem_byt_rden = dmem_byt_rden_o;
+    assign gpio_bus.dmem_byt_wrflg = dmem_byt_wrflg_o;
 
     // Connect inputs TO the core FROM the interfaces
     assign imem_rdata_i = imem_bus.rdata;
@@ -180,6 +185,8 @@ module core (
         .alu_src_b_sel_out(alu_src_b_sel_to_dp),
         .dmem_write_en_out(dmem_write_en_to_dp),
         .mmio_rden_out(mmio_rden_o),
+        .dmem_byt_rden_out(dmem_byt_rden_o),
+        .dmem_byt_wrflg_out(dmem_byt_wrflg_o),
         .dmem_addr_sel_out(dmem_addr_sel_to_dp),
         .dmem_data_sel_out(dmem_data_sel_to_dp),
         .sp_op_inc_out(sp_op_inc_to_dp),
