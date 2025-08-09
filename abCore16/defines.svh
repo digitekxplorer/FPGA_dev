@@ -17,6 +17,7 @@
 // Dependencies: None
 // 
 // Revision:
+// Revision 1.2 - Added all byte-access instruction opcodes: LOADB, STORB, LOADIB, STORIB, LOADBFR, STORBFR
 // Revision 1.1 - Added back missing DATA_MEMORY_WORDS macro definition.
 // Revision 1.0 - Synced with Python toolchain and added control constants.
 //
@@ -37,6 +38,13 @@
 `define OP_STORFR   8'h05 // STORFR Rt, Rbase, #off16 (5 bytes)
 `define OP_LOADI    8'h06 // LOADI Rd, Rs_addr (3 bytes)
 `define OP_STORI    8'h07 // STORI Rt_val, Rs_addr (3 bytes)
+// NEW: Byte access instructions
+`define OP_LOADB    8'h08 // LOADB Rd, Addr16 (4 bytes) - Load byte from memory
+`define OP_STORB    8'h09 // STORB Rs, Addr16 (4 bytes) - Store byte to memory
+`define OP_LOADIB   8'h0A // LOADIB Rd, Rs_addr (3 bytes) - Load byte indirect
+`define OP_STORIB   8'h0B // STORIB Rt_val, Rs_addr (3 bytes) - Store byte indirect
+`define OP_LOADBFR  8'h0C // LOADBFR Rd, Rbase, #off16 (5 bytes) - Load byte frame-relative
+`define OP_STORBFR  8'h0D // STORBFR Rt, Rbase, #off16 (5 bytes) - Store byte frame-relative
 `define OP_ADD      8'h10 // ADD Rd, Rs (3 bytes)
 `define OP_SUB      8'h11 // SUB Rd, Rs (3 bytes)
 `define OP_MUL      8'h12 // MUL Rd, Rs (3 bytes)
@@ -82,6 +90,7 @@
 `define DATA_WIDTH 16
 `define ADDR_WIDTH 14
 `define DATA_MEMORY_BYTES 8192 // Max capacity for 16-bit addressing. Defines SP initial value.
+`define INSTRUCTION_MEMORY_BYTES 4096 // Instruction memory for 8-bit addressing. Use only half the total memory.
 
 //================================================================
 // Register Definitions
