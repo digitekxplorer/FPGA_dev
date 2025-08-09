@@ -59,7 +59,8 @@ import mmio_reg_pkg::*;
 //`define IMEM_HEX_FILE "test_new_features.hex"  // p++ and p--, else if, switch
 //`define IMEM_HEX_FILE "test_blink.hex"  // blink LED using SW counters
 //`define IMEM_HEX_FILE "test_timer.hex"  // blink LED using HW timer
-`define IMEM_HEX_FILE "test_uart.hex"  // UART at 9600 baud
+`define IMEM_HEX_FILE "test_uart.hex"  // UART at 115,200 baud
+//`define IMEM_HEX_FILE "test_char.hex"  // test char data type
 
 module cpu_tl (
     input  logic clk_12MHz,
@@ -96,13 +97,16 @@ logic        mmio_rd_valid;
 logic        uart_rx_access;
 logic        memorymap_range;
 logic        tx_start_btn;
-//logic        mmio_rden;
 // LED control signal
 logic [15:0] led_ctrl;
 // clock and reset
 logic clk;
 logic rst_n;
 logic locked;
+
+logic                   dmem_wren_fsm;
+logic [`ADDR_WIDTH-2:0] dmem_word_addr_fsm;
+logic [15:0]            dmem_word_data_fsm;
 
 // To reduce pin count for development board assign gpio_in_i here.
 logic [`DATA_WIDTH-1:0] gpio_in_i;
@@ -170,23 +174,6 @@ assign gpio_out_we_o = gpio_bus.wren;
 
 
 //================================================================
-// Memory-mapped IO range check and data mux
-//================================================================
-// Memory-mapped IO between 0x1800 and 0x1900 (6144 and 6400)
-// --- Data Memory Read Mux ---
-// This logic now determines what data gets driven INTO the dmem_bus
-//assign memorymap_range = ( dmem_bus.addr >= 6144 && dmem_bus.addr < 6400 );
-assign memorymap_range = ( dmem_bus.addr >= MMIO_ADDRESS_BASE && 
-                           dmem_bus.addr < (MMIO_ADDRESS_BASE + MMIO_ADDRESS_RANGE) );
-always_comb begin
-    if (memorymap_range) begin
-        dmem_bus.rdata = mmio_rd_data;      // Read data comes from memory-mapped IO
-    end else begin
-        dmem_bus.rdata = dmem_bram_rdata_i; // Read data comes from BRAM
-    end
-end
-
-//================================================================
 // Module Instantiations
 //================================================================
 // --- abCore16 microprocessor core ---
@@ -200,7 +187,6 @@ core core01 (
     .imem_bus  (imem_bus.master),  // instruction bus interface
     .dmem_bus  (dmem_bus.master),  // data bus interface
     .gpio_bus  (gpio_bus.cpu),     // gpio bus interface
-//    .mmio_rden_o (mmio_rden),      // memory read Rd = Mem[Rs_addr]
     .halted_o  (halted_o)
 );
 
@@ -236,7 +222,6 @@ uart_mn #(
     .uart_bus          (uart_bus.peripheral),   // uart interface
     .i_tx_start_manual (tx_start_btn),
     .i_uart_rx_access  (uart_rx_access),
-//    .i_mmio_rden       (mmio_rden),            // memory read Rd = Mem[Rs_addr]
     .gpio_bus          (gpio_bus.peripheral),    // gpio and mmio
     .o_uart_tx         (uart_tx_o),
     .i_uart_rx         (uart_rx_sync)
@@ -264,6 +249,11 @@ end
 // Use .hex file for fast simulation model without having to update
 // BRAM IP.
 
+logic [`ADDR_WIDTH-2:0] dmem_word_addr;
+// Convert the byte address from the CPU to a word address for the BRAM
+// by right-shifting by one (equivalent to dropping the LSB).
+assign dmem_word_addr = dmem_bus.addr >> 1;
+
 `ifdef MEMORYMODELSIM
     
     initial begin
@@ -271,30 +261,44 @@ end
         $display("SIM_INFO: Loading instruction memory from '%s'.", `IMEM_HEX_FILE);
     end
 
-    // Behavioral Instruction and Data Memory
+    // Behavioral Instruction Memory
     logic [7:0] instruction_memory [0:`INSTRUCTION_MEMORY_BYTES-1];
+    // Data Memory
     logic [`DATA_WIDTH-1:0] data_memory [0: (`DATA_MEMORY_BYTES/2)-1];
-    // Read the .hex file and place in Instruction Memory, much faster process
+    
+    // Initialize data memory
+    initial begin
+        for (int i = 0; i > (`DATA_MEMORY_BYTES/2)-1; i++) begin
+            data_memory[i] <= 16'h0; // clear data memory
+        end
+    end
+    
+     // Read the .hex file and place in Instruction Memory, much faster process
     // than updating the BRAM IP.
     initial $readmemh(`IMEM_HEX_FILE, instruction_memory);
 
-    // Read from Instruction and Data memory. Use bus interfaces.
-    // One clock latency to match BRAM behavior
+    // ********************
+    // Read from Instruction and Data memory
+    // ********************
+    // Use bus interfaces. One clock latency to match BRAM behavior.
     always_ff @(posedge clk) begin
         // The memory drives the read data signal of the instruction bus
         imem_bus.rdata  <= instruction_memory[imem_bus.addr];
-        // The memory drives the dedicated BRAM read data wire
-        dmem_bram_rdata_i = data_memory[dmem_bus.addr >> 1];
+        // The memory drives the dedicated BRAM read data
+//        dmem_bram_rdata_i = data_memory[dmem_bus.addr >> 1];
+        dmem_bram_rdata_i = data_memory[dmem_word_addr_fsm];  // signal from FSM
     end
     
+    // ********************
     // Write to Data memory
+    // ********************
     // Use bus interfaces.
     // One clock latency to match BRAM behavior
     always_ff @(posedge clk) begin
         // Check the write enable from the data bus
-        if (dmem_bus.wren) begin
+        if (dmem_wren_fsm) begin
             // Use the address and write data from the data bus
-            data_memory[dmem_bus.addr >> 1] <= dmem_bus.wdata;
+            data_memory[dmem_word_addr_fsm] <= dmem_word_data_fsm; // signal from FSM
         end
     end
     
@@ -307,11 +311,6 @@ end
         $display("INFO: Compiling with SYNTHESIS BRAM IP Core model.");
     end
     
-    
-    logic [`ADDR_WIDTH-2:0] dmem_word_addr;
-    // Convert the byte address from the CPU to a word address for the BRAM
-    // by right-shifting by one (equivalent to dropping the LSB).
-    assign dmem_word_addr = dmem_bus.addr >> 1;
 
     // BRAM: Program Memory IP Core
     // NOTE: instruction memory access is 8-bits while data memory access is 
@@ -329,12 +328,246 @@ end
         // Data Memory Interface (connected to dmem_bus, 16-bit access)
         .clkb   ( clk ),
         .enb    ( 1'b1 ),    // dout always active
-        .web    ( dmem_bus.wren ),
-        .addrb  ( {1'b0, dmem_word_addr} ),
-        .dinb   ( {2'b00, dmem_bus.wdata} ),
+        .web    ( dmem_wren_fsm ),               // signal from FSM
+        .addrb  ( {1'b0, dmem_word_addr_fsm} ),  // signal from FSM
+        .dinb   ( {2'b00, dmem_word_data_fsm} ), // signal from FSM
         .doutb  ( dmem_bram_rdata_i )    // BRAM drives the dedicated bus
     );
 `endif
+
+// ================
+// Byte Write Logic
+// ================
+logic    dmem_wren_r;
+logic    dmem_wren_2r;
+logic    dmem_byt_wrflg_r;
+logic    dmem_addr_lsb_r;
+logic    dmem_addr_lsb_2r;
+//logic    wr_flg_redge;
+logic [`ADDR_WIDTH-2:0] dmem_word_addr_sav;
+logic [15:0]            dmem_wdata_r;
+logic [15:0]            dmem_wdata_low_sav;
+logic [15:0]            dmem_wdata_hi_sav;
+
+
+// 1 clk delay
+always_ff@(posedge clk) begin
+   if(!rst_n) begin
+       dmem_wren_r          <= 1'b0;
+       dmem_wren_2r         <= 1'b0;
+       dmem_addr_lsb_r      <= 1'b0;
+       dmem_addr_lsb_2r     <= 1'b0;
+       dmem_byt_wrflg_r     <= 1'b0;
+       // data
+       dmem_wdata_r         <= 16'h0;
+   end
+   else begin 
+       dmem_wren_r          <= dmem_bus.wren;
+       dmem_wren_2r         <= dmem_wren_r;
+       dmem_addr_lsb_r      <= dmem_bus.addr[0];
+       dmem_addr_lsb_2r     <= dmem_addr_lsb_r;
+       dmem_byt_wrflg_r     <= gpio_bus.dmem_byt_wrflg;
+       // data
+       dmem_wdata_r         <= dmem_bus.wdata;
+   end
+end
+
+
+// capture address for the complete READ-Modify-Write sequence
+always_ff@(posedge clk) begin
+   if(!rst_n) begin
+       // address
+       dmem_word_addr_sav        <= '0;
+   end
+   else begin 
+       if (gpio_bus.dmem_byt_wrflg) begin
+           dmem_word_addr_sav        <= dmem_word_addr;
+       end
+   end
+end
+
+// capture data for the complete READ-Modify-Write sequence
+always_ff@(posedge clk) begin
+   if(!rst_n) begin
+       // data
+       dmem_wdata_low_sav        <= 16'h0;
+       dmem_wdata_hi_sav         <= 16'h0;
+   end
+   else begin 
+       if (dmem_byt_wrflg_r) begin
+           dmem_wdata_low_sav        <= {dmem_bram_rdata_i[15:8], dmem_wdata_r[7:0]};
+           dmem_wdata_hi_sav         <= {dmem_wdata_r[7:0], dmem_bram_rdata_i[7:0]};
+//           dmem_wdata_low_sav        <= {dmem_bram_rdata_i[15:8], dmem_bus.wdata[7:0]};
+//           dmem_wdata_hi_sav         <= {dmem_bus.wdata[7:0], dmem_bram_rdata_i[7:0]};
+       end
+   end
+end
+
+
+// Rising edge gpio_bus.dmem_byt_wrflg
+//logic [1:0] wr_flg_shft;
+//always_ff@(posedge clk) begin
+//   if(!rst_n) begin
+//       wr_flg_shft <= 2'b00; 
+//   end
+//   else begin 
+//       wr_flg_shft <= { wr_flg_shft[0], gpio_bus.dmem_byt_wrflg };
+//   end
+//end
+//assign wr_flg_redge = wr_flg_shft == 2'b01;
+
+// **********
+// Write FSM
+// **********
+// We have to perform a Read-Modify-Write sequence to update one byte of a
+// 16-bit word.
+// State machine for byte Write
+typedef enum logic [1:0] {
+    IDLE,
+    MEM_READ,
+    MODIFY,
+    MEM_WRITE
+} wr_state_t;
+    
+wr_state_t wr_state;
+    
+always_ff @(posedge clk) begin
+    if (!rst_n) begin
+        wr_state <= IDLE;
+    end else begin 
+        case (wr_state)
+            IDLE: begin
+                if ( gpio_bus.dmem_byt_wrflg ) begin
+                    wr_state <= MEM_READ;
+                end
+            end
+            // Read
+            MEM_READ: begin
+                wr_state <= MODIFY;
+            end
+            // Modify-Write
+            MODIFY: begin
+                wr_state <= MEM_WRITE;
+            end
+            // Write
+            MEM_WRITE: begin
+                wr_state <= IDLE;
+            end
+        endcase
+    end
+end
+
+// Assign values to wren, addr, and data during each stage of the 
+// Read-Modify-Write sequence
+always_comb begin
+    if(!rst_n) begin
+        dmem_wren_fsm       <= 1'b0;
+        dmem_word_addr_fsm  <= '0;
+        dmem_word_data_fsm  <= '0;
+    end
+    else begin 
+        // defaults
+        dmem_wren_fsm <= 1'b0;
+        if ( wr_state == IDLE ) begin 
+	        dmem_wren_fsm       <= dmem_bus.wren; 
+		    dmem_word_addr_fsm  <= dmem_word_addr;
+		    dmem_word_data_fsm  <= dmem_bus.wdata;
+	    end
+		if ( wr_state == MEM_READ ) begin 
+		    dmem_wren_fsm      <= 1'b0;           // do not write to memory yet
+		    dmem_word_addr_fsm <= dmem_word_addr;
+		    dmem_word_data_fsm <= dmem_wdata_r;
+		end
+		
+		if ( wr_state == MODIFY ) begin 
+		    dmem_wren_fsm         <= 1'b0;       // do not write to memory yet
+		    dmem_word_addr_fsm    <= dmem_word_addr_sav;
+		    dmem_word_data_fsm <= dmem_wdata_r;	
+        end	 
+        
+ 		if ( wr_state == MEM_WRITE ) begin  
+		    dmem_wren_fsm         <= dmem_wren_2r;  // write to memory
+		    dmem_word_addr_fsm    <= dmem_word_addr_sav;
+		    //dmem_word_data_fsm <= dmem_wdata_r;
+		    // Select the correct byte to update
+            if ( dmem_addr_lsb_2r ) begin
+                // write new byte to upper byte
+                // dmem_word_data_fsm = {dmem_bus.wdata[7:0], dmem_bram_rdata_i[7:0]};
+                dmem_word_data_fsm = dmem_wdata_hi_sav;
+            end else begin
+               // write new byte to lower byte
+               // dmem_word_data_fsm = {dmem_bram_rdata_i[15:8], dmem_bus.wdata[7:0]};
+               dmem_word_data_fsm = dmem_wdata_low_sav;
+            end	
+		end
+		
+    end
+end
+
+
+//================================================================
+// Memory-mapped IO range check and data mux
+//================================================================
+// Memory-mapped IO between 0x1800 and 0x1900 (6144 and 6400)
+// --- Data Memory Read Mux ---
+// This logic now determines what data gets driven INTO the dmem_bus
+//assign memorymap_range = ( dmem_bus.addr >= 6144 && dmem_bus.addr < 6400 );
+assign memorymap_range = ( dmem_bus.addr >= MMIO_ADDRESS_BASE && 
+                           dmem_bus.addr < (MMIO_ADDRESS_BASE + MMIO_ADDRESS_RANGE) );
+
+// ================
+// Byte Read Logic
+// ================
+// Reading byte from BRAM (LOADIB)
+// Memory Data MUX select
+logic [1:0] dmem_rd_data_sel;
+always_comb begin
+    dmem_rd_data_sel = 2'b00;         // default:  Read 16-bit word from BRAM
+    // Byte Read
+    if (gpio_bus.dmem_byt_rden) begin // Byte Read is Active
+        if (!memorymap_range) begin   // Read from BRAM
+            // Select 2'b10 for lower byte, 2'b11 for upper byte
+            dmem_rd_data_sel = {1'b1, dmem_bus.addr[0]};
+        end
+    end
+    // NOTE: Byte access to memory-mapped registers is undefined and falls to default
+    else begin // Word Read  (16-bits)
+        if (memorymap_range) begin     // Read 16-bit word from memory-mapped registers
+            dmem_rd_data_sel = 2'b01;
+        end 
+        else begin                     // Read 16-bit word from BRAM
+            dmem_rd_data_sel = 2'b00;
+        end
+    end
+end
+
+//always_comb begin
+//    if (memorymap_range) begin
+//        dmem_bus.rdata = mmio_rd_data;      // Read data comes from memory-mapped IO
+//    end else begin
+//        dmem_bus.rdata = dmem_bram_rdata_i; // Read data comes from BRAM
+//    end
+//end
+
+// Memory Data MUX
+//     0   0    Read 16-bit word from BRAM
+//     0   1    Read 16-bit word from memory-mapped registers
+//     1   0    Read 16-bit word from BRAM and use lower byte
+//     1   1    Read 16-bit word from BRAM and use upper byte
+always_comb begin
+    case( dmem_rd_data_sel )
+        // Read 16-bit word from BRAM
+        2'b00: dmem_bus.rdata = dmem_bram_rdata_i;
+        // Read 16-bit word from memory-mapped registers
+        2'b01: dmem_bus.rdata = mmio_rd_data;
+        // Read 16-bit word from BRAM and use lower 8-bit byte
+        2'b10: dmem_bus.rdata = {8'h0,dmem_bram_rdata_i[7:0]};
+        // Read 16-bit word from BRAM and use upper 8-bit byte
+        2'b11: dmem_bus.rdata = {8'h0,dmem_bram_rdata_i[15:8]};
+        default: dmem_bus.rdata = dmem_bram_rdata_i;
+    endcase  
+end
+
     
 //================================================================
 // LED Control Logic
