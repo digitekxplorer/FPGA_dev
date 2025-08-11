@@ -37,8 +37,8 @@ import mmio_reg_pkg::*;
 `include "abcore_interfaces.sv" // INCLUDE INTERFACES FILE
 
 // For Synthesis, comment out both defines
-//`define MEMORYMODELSIM    // use hex file
-//`define SIMSPEEDUPCLK     // use Testbench 12MHz clock
+`define MEMORYMODELSIM    // use hex file
+`define SIMSPEEDUPCLK     // use Testbench 12MHz clock
 
 // --- FOR SIMULATION: Use a fast, behavioral memory model ---
 // Remember: Must add new coe and hex files to abCore16 project as Coefficient 
@@ -61,6 +61,8 @@ import mmio_reg_pkg::*;
 //`define IMEM_HEX_FILE "test_timer.hex"  // blink LED using HW timer
 `define IMEM_HEX_FILE "test_uart.hex"  // UART at 115,200 baud
 //`define IMEM_HEX_FILE "test_char.hex"  // test char data type
+//`define IMEM_HEX_FILE "test_loadb_storb.hex"  // Test byte instructions
+//`define IMEM_HEX_FILE "test_loadbfr_storbfr.hex"  // Test byte instructions, frame relative
 
 module cpu_tl (
     input  logic clk_12MHz,
@@ -338,8 +340,6 @@ assign dmem_word_addr = dmem_bus.addr >> 1;
 // ================
 // Byte Write Logic
 // ================
-logic    dmem_wren_r;
-logic    dmem_wren_2r;
 logic    dmem_byt_wrflg_r;
 logic    dmem_addr_lsb_r;
 logic    dmem_addr_lsb_2r;
@@ -353,22 +353,18 @@ logic [15:0]            dmem_wdata_hi_sav;
 // 1 clk delay
 always_ff@(posedge clk) begin
    if(!rst_n) begin
-       dmem_wren_r          <= 1'b0;
-       dmem_wren_2r         <= 1'b0;
        dmem_addr_lsb_r      <= 1'b0;
        dmem_addr_lsb_2r     <= 1'b0;
        dmem_byt_wrflg_r     <= 1'b0;
        // data
-       dmem_wdata_r         <= 16'h0;
+       dmem_wdata_r         <= 16'h0;            
    end
    else begin 
-       dmem_wren_r          <= dmem_bus.wren;
-       dmem_wren_2r         <= dmem_wren_r;
        dmem_addr_lsb_r      <= dmem_bus.addr[0];
        dmem_addr_lsb_2r     <= dmem_addr_lsb_r;
        dmem_byt_wrflg_r     <= gpio_bus.dmem_byt_wrflg;
        // data
-       dmem_wdata_r         <= dmem_bus.wdata;
+       dmem_wdata_r         <= dmem_bus.wdata;      // TODO: verify
    end
 end
 
@@ -378,10 +374,13 @@ always_ff@(posedge clk) begin
    if(!rst_n) begin
        // address
        dmem_word_addr_sav        <= '0;
+//       dmem_wdata_r         <= 16'h0;
    end
    else begin 
        if (gpio_bus.dmem_byt_wrflg) begin
            dmem_word_addr_sav        <= dmem_word_addr;
+//           dmem_wdata_r         <= dmem_bus.wdata;      // TODO: verify
+           
        end
    end
 end
@@ -486,7 +485,7 @@ always_comb begin
         end	 
         
  		if ( wr_state == MEM_WRITE ) begin  
-		    dmem_wren_fsm         <= dmem_wren_2r;  // write to memory
+		    dmem_wren_fsm         <= 1'b1;        // write to memory
 		    dmem_word_addr_fsm    <= dmem_word_addr_sav;
 		    //dmem_word_data_fsm <= dmem_wdata_r;
 		    // Select the correct byte to update
