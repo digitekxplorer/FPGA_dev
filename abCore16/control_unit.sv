@@ -25,6 +25,9 @@
 // Instructions that require a 16-bit immediate value from instruction memory
 // need an extra one clock delay to assemble the both bytes from BRAM to create
 // the 16-bit value (imm_val_to_dp_out from imem_rdata_i).
+//
+// Each instructions needs to fetch opcode and depending on the length of the
+// instruction it has to load values into operand registers. 
 
 `include "defines.svh"
 
@@ -433,14 +436,22 @@ module control_unit (
                                    rf_write_data_sel_out=`WB_SRC_MEM; 
                                end
 
-                    // NEW: STORB - Store byte to memory address  
+                    // NEW: STORB - Store byte to memory address 
+                    // READ-Modify-Write sequence 
                     `OP_STORB: if(current_state==S_EXECUTE)   begin
-                                   // nothing to do
+                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_IMM;
+                                   // data out to DMEM
+                                   dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt_val
+                                   dmem_byt_wrflg_out=1'b1;                // data memory byte
                                end
                                else if(current_state==S_MEM_ACCESS) begin 
-                                   dmem_write_en_out=1'b1; 
-                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_IMM; 
-//                                   dmem_byte_en_out=1'b1;                   // Enable byte access
+                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_IMM;
+                                   // data out to DMEM
+                                   dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt_val
+                                   dmem_byt_wrflg_out=1'b1;                // data memory byte read
+//                                 dmem_byte_en_out=1'b1;                 // Enable byte access
+                                   // write to DMEM
+                                   dmem_write_en_out=1'b1;                // write to dmem                // Enable byte access
                                end 
 
                     // NEW: LOADB - Load byte from memory address
@@ -448,12 +459,14 @@ module control_unit (
                                    // nothing to do
                                end
                                else if(current_state==S_MEM_ACCESS) begin  
-                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_IMM; 
+                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_IMM;
+                                   dmem_byt_rden_out=1'b1;                    // Read byte 
 //                                   dmem_byte_en_out=1'b1;                   // Enable byte access
                                end
                                else if(current_state==S_WRITEBACK) begin 
                                    rf_write_en_out=1'b1; 
-                                   rf_write_data_sel_out=`WB_SRC_MEM; 
+                                   rf_write_data_sel_out=`WB_SRC_MEM;
+                                   dmem_byt_rden_out=1'b1;                    // Read byte 
 //                                   dmem_byte_en_out=1'b1;                   // Enable byte access
                                end
 
@@ -558,7 +571,7 @@ module control_unit (
                             dmem_write_en_out=1'b1;                // write to dmem
                         end
                         
-                    // NEW: LOADBFR - Load byte frame-relative: Rd = Mem[R_base + off16] (byte access)
+                    // LOADBFR - Load byte frame-relative: Rd = Mem[R_base + off16] (byte access)
                     `OP_LOADBFR: 
                         if(current_state==S_EXECUTE) begin 
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
@@ -566,6 +579,7 @@ module control_unit (
                             alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
                             alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
                             rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+                            dmem_byt_rden_out=1'b1;                    // Read byte 
 //                            dmem_byte_en_out=1'b1;                 // Enable byte access
                         end
                         else if(current_state==S_MEM_ACCESS) begin 
@@ -574,6 +588,7 @@ module control_unit (
                             alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
                             alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
                             rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+                            dmem_byt_rden_out=1'b1;                    // Read byte 
 //                            dmem_byte_en_out=1'b1;                 // Enable byte access
                         end
                         else if(current_state==S_WRITEBACK) begin 
@@ -582,12 +597,14 @@ module control_unit (
                             alu_src_a_sel_out=`ALU_A_SRC_REG;      // src R_base
                             alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
                             rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
+                            dmem_byt_rden_out=1'b1;                    // Read byte 
 //                            dmem_byte_en_out=1'b1;                 // Enable byte access
                             // write to Register File
                             rf_write_en_out=1;                     // write to Rd
                         end
                         
                     // NEW: STORBFR - Store byte frame-relative: Mem[R_base + off16] = Rt (byte access)
+                    // READ-Modify-Write sequence
                     `OP_STORBFR: 
                         if(current_state==S_EXECUTE) begin 
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
@@ -596,6 +613,7 @@ module control_unit (
                             alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
                             // data out to DMEM
                             dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt
+                            dmem_byt_wrflg_out=1'b1;                // data memory byte read
 //                            dmem_byte_en_out=1'b1;                 // Enable byte access
                         end
                         else if(current_state==S_MEM_ACCESS) begin 
@@ -605,6 +623,7 @@ module control_unit (
                             alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
                             // data out to DMEM
                             dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt
+                            dmem_byt_wrflg_out=1'b1;                // data memory byte read
 //                            dmem_byte_en_out=1'b1;                 // Enable byte access
                             // write to DMEM
                             dmem_write_en_out=1'b1;                // write to dmem
@@ -689,6 +708,7 @@ module control_unit (
                         end
                         
                     // NEW: STORIB - Store byte indirect: Mem[Rs_addr] = Rt_val (byte access)
+                    // READ-Modify-Write sequence
                     `OP_STORIB: 
                         if(current_state==S_EXECUTE) begin 
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;  // alu_result_internal
