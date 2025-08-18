@@ -86,6 +86,37 @@ interface gpio_bus_if (input logic clk, input logic rst_n);
        
 endinterface
 
+// --- Programmable Interrupt Controller (PIC) Bus Interface ---
+interface pic_if (input logic clk, input logic rst_n);
+    logic [15:0] irr;       // Interrupt Request Register
+    logic [15:0] imr;       // Interrupt Mask Register
+    logic [15:0] isr;       // In-Service Register
+    logic [ 3:0] irq_num;   // irq number for End-of-Interrupt
+    // Interrupt interface
+    logic [15:0] irq;       // Interrupt request lines from peripherals
+    logic [ 3:0] grant_vec; // Grant interrupt vector; in-service number
+    logic        intrpt;    // Master interrupt signal to CPU
+
+
+    // View from the CPU (controller)
+    modport controller (
+        input  clk, rst_n, irr, isr, grant_vec, intrpt,
+        //
+        output imr, irq_num
+    );
+    
+    // View from the device (MMIO peripheral)
+    modport peripheral (
+        input  clk, rst_n, imr, irq_num, irq,
+        //
+        output irr, isr, grant_vec, intrpt
+    );
+       
+endinterface
+
+
+// ******************************
+
 
 // --- Timer Interface ---
 interface timer_if (input logic clk, input logic rst_n);
@@ -100,8 +131,8 @@ interface timer_if (input logic clk, input logic rst_n);
     );
     
     modport peripheral ( 
-        output timeout, overflow, running, count, 
-        input clk, rst_n, enable, reset, mode, prescale_en, prescale, reload_value 
+        input clk, rst_n, enable, reset, mode, prescale_en, prescale, reload_value,
+        output timeout, overflow, running, count 
     );
 endinterface
 
@@ -117,25 +148,10 @@ interface uart_if (input logic clk, input logic rst_n);
     );
     
     modport peripheral ( 
-        output tx_fifo_avail, rx_data, rx_fifo_avail, rx_frame_error, rx_fifo_prog_full,
-        input clk, rst_n, tx_data, tx_start, reset_flags 
+        input clk, rst_n, tx_data, tx_start, reset_flags,
+        output tx_fifo_avail, rx_data, rx_fifo_avail, rx_frame_error, rx_fifo_prog_full
     );
 
-
-
-//interface uart_if (input logic clk, input logic rst_n);
-//    logic [7:0]  tx_data, rx_data;
-//    logic        tx_start, reset_flags, tx_busy, rx_data_valid, rx_frame_error;
-
-//    modport controller ( 
-//        input clk, rst_n, tx_busy, rx_data, rx_data_valid, rx_frame_error, 
-//        output tx_data, tx_start, reset_flags 
-//    );
-    
-//    modport peripheral ( 
-//        output tx_busy, rx_data, rx_data_valid, rx_frame_error, 
-//        input clk, rst_n, tx_data, tx_start, reset_flags 
-//    );
     
 endinterface
 
