@@ -59,10 +59,11 @@ import mmio_reg_pkg::*;
 //`define IMEM_HEX_FILE "test_new_features.hex"  // p++ and p--, else if, switch
 //`define IMEM_HEX_FILE "test_blink.hex"  // blink LED using SW counters
 //`define IMEM_HEX_FILE "test_timer.hex"  // blink LED using HW timer
-`define IMEM_HEX_FILE "test_uart.hex"  // UART at 115,200 baud
 //`define IMEM_HEX_FILE "test_char.hex"  // test char data type
 //`define IMEM_HEX_FILE "test_loadb_storb.hex"  // Test byte instructions
 //`define IMEM_HEX_FILE "test_loadbfr_storbfr.hex"  // Test byte instructions, frame relative
+//`define IMEM_HEX_FILE "test_uart.hex"  // UART at 115,200 baud
+`define IMEM_HEX_FILE "test_interrupt.hex"   // Interrupt testing
 
 module cpu_tl (
     input  logic clk_12MHz,
@@ -99,6 +100,8 @@ logic        mmio_rd_valid;
 logic        uart_rx_access;
 logic        memorymap_range;
 logic        tx_start_btn;
+logic        eoi_update;
+logic        enable_int;
 // LED control signal
 logic [15:0] led_ctrl;
 // clock and reset
@@ -149,6 +152,7 @@ assign rst_n = locked;
 // Pass the system clock and reset to them.
 timer_if timer_bus ( .clk(clk), .rst_n(rst_n) );
 uart_if  uart_bus  ( .clk(clk), .rst_n(rst_n) );
+pic_if   pic_bus   ( .clk(clk), .rst_n(rst_n) );
 // --- CPU Bus Interfaces ---
 imem_bus_if imem_bus ( .clk(clk), .rst_n(rst_n) );
 dmem_bus_if dmem_bus ( .clk(clk), .rst_n(rst_n) );
@@ -184,12 +188,14 @@ assign gpio_out_we_o = gpio_bus.wren;
 // 2) data memory (access both data and memory-mapped IO)
 // 3) GPIO bus (GPIO bus used for print instruction)
 core core01 (
-    .clk       (clk),
-    .rst_n     (rst_n),
-    .imem_bus  (imem_bus.master),  // instruction bus interface
-    .dmem_bus  (dmem_bus.master),  // data bus interface
-    .gpio_bus  (gpio_bus.cpu),     // gpio bus interface
-    .halted_o  (halted_o)
+    .clk          (clk),
+    .rst_n        (rst_n),
+    .imem_bus     (imem_bus.master),     // instruction bus interface
+    .dmem_bus     (dmem_bus.master),     // data bus interface
+    .gpio_bus     (gpio_bus.cpu),        // gpio bus interface
+    .pic_bus      (pic_bus.controller),  // PIC interface
+    .enable_int_o (enable_int),          // enable interrupts
+    .halted_o     (halted_o)
 );
 
 // --- Memory-mapped IO Registers ---
@@ -200,10 +206,12 @@ mmio_regs mmio_regs01 (
     .dmem_bus               (dmem_bus.slave),        // cpu interface (data bus)
     .timer_bus              (timer_bus.controller),  // timer interface
     .uart_bus               (uart_bus.controller),   // uart interface
+    .pic_bus                (pic_bus.controller),    // PIC interface
     .memorymap_range        (memorymap_range),
     .mmio_rd_data_o         (mmio_rd_data),
     .mmio_rd_valid_o        (mmio_rd_valid),
     .uart_rx_access_o       (uart_rx_access),
+    .eoi_update_o           (eoi_update),
     .led_ctrl_o             (led_ctrl)
 );
 
@@ -243,6 +251,25 @@ always_ff @(posedge clk or negedge rst_n) begin
         tx_start_btn <= tx_trig_shft[2:1] == 2'b01;
     end
 end
+
+
+// --- Programmable Interrupt Controller (PIC) Module Instantiation ---
+//logic [15:0] irq;       // Interrupt request lines from peripherals
+//assign irq = '0;
+
+// Assign interrupts to PIC
+logic int0_timeout;
+logic int1_uartrx;
+assign int0_timeout = timer_bus.timeout;
+assign int1_uartrx = uart_bus.rx_fifo_avail;
+assign pic_bus.peripheral.irq = {14'h0, int1_uartrx, int0_timeout};  // Interrupt request lines from peripherals
+pic pic01 (
+    // Connect the peripheral side of the interface
+    .pic_bus      (pic_bus.peripheral),     // PIC interface
+    .enable_int_i (enable_int),             // enable interrupts
+//    .irq_i        (irq),       // Interrupt request lines from peripherals
+    .eoi_update_i (eoi_update)
+);
 
 
 //================================================================
