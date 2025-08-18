@@ -41,6 +41,8 @@ module control_unit (
     input  logic       ZF_in, SF_in, CF_in, OF_in,
     input  logic       reg_is_zero_in,
     input  logic       reg_is_neg_in,
+    
+    input  logic       intrpt_in,
 
     // --- Outputs to Datapath ---
     // PC Control
@@ -55,6 +57,7 @@ module control_unit (
     output logic [1:0] rf_write_data_sel_out,
     // Flags Register Control
     output logic       flags_write_en_out,
+//    output logic       reti_flags_sel_out,
     // Immediate Value
     output logic [`DATA_WIDTH-1:0] imm_val_to_dp_out,
     // ALU Control
@@ -68,10 +71,14 @@ module control_unit (
     output logic       dmem_byt_wrflg_out,    // data memory byte write
     output logic [1:0] dmem_addr_sel_out,
     output logic [1:0] dmem_data_sel_out,
+    output logic       imem_addr_sel_out,
 //    output logic       dmem_byte_en_out,     // NEW: Enable byte access mode
     // Stack Pointer Control
     output logic       sp_op_inc_out,
     output logic       sp_op_dec_out,
+    // Interrupt control
+    output logic       enable_int_out,
+    output logic       save_pc_out,
     // GPIO Control
     output logic       gpio_out_we_out,
     
@@ -96,6 +103,11 @@ module control_unit (
     logic [7:0] ir_operand4_reg; // Holds byte 5 of instruction
     
     logic       gpio_out_we;
+    logic       enable_int_set;
+    logic       enable_int_clr;
+    logic       intrpt_in_sav;
+    logic       int_cond_met;
+//    logic       intrpt_in_sav_clr;
     
     logic       mmio_rden;
     
@@ -104,9 +116,10 @@ module control_unit (
     //================================================================
     // FSM State Definition
     //================================================================
-    typedef enum logic [3:0] { 
+    typedef enum logic [4:0] { 
         S_RESET, S_FETCH_OPCODE, 
         S_DECODE,
+        S_INT_VEC_GET_LOW, S_INT_VEC_GET_HI, S_INT_VEC_WAIT, S_JMP_TO_ISR,
         S_FETCH_OP1, S_FETCH_OP2, S_FETCH_OP3, S_FETCH_OP4,
         S_BRAM_DLY, S_BRANCH_DLY, // ab: one clk delays
         S_RTN_ADDR,
@@ -143,7 +156,7 @@ module control_unit (
             // 2-byte instructions
             `OP_INC, `OP_DEC, `OP_NOT, `OP_INP, `OP_OUT, `OP_PUSH, `OP_POP, `OP_MOVFRSP, `OP_MOVTOSP: total_instr_bytes = 3'd2;
             // 1-byte instructions
-            `OP_RET, `OP_NOP, `OP_HALT: total_instr_bytes = 3'd1;
+            `OP_RET, `OP_NOP, `OP_HALT, `OP_EI, `OP_DI, `OP_RETI: total_instr_bytes = 3'd1;
             default: total_instr_bytes = 3'd1;
         endcase
         
@@ -158,16 +171,47 @@ module control_unit (
     //================================================================
     // Combinational Logic Part 2: FSM Next State Logic
     //================================================================
+    // Interrupt condition met
+    assign int_cond_met = enable_int_out && intrpt_in_sav;
+    
     always_comb begin
         next_state = current_state; 
         case(current_state)
             S_RESET:        next_state = S_FETCH_OPCODE;
             
-            S_FETCH_OPCODE: next_state = S_DECODE;
+//            S_FETCH_OPCODE: next_state = S_DECODE;
+            S_FETCH_OPCODE: begin
+                if ( int_cond_met ) begin
+                    // Interrupt detected
+//                    save_pc_out = 1'b1;
+                    next_state = S_INT_VEC_GET_LOW; 
+                end
+                else begin
+                    next_state = S_DECODE; 
+                end
+            end
+            
+            S_INT_VEC_GET_LOW: begin
+                next_state = S_INT_VEC_GET_HI;
+            end
+            
+            S_INT_VEC_GET_HI: begin
+                next_state = S_INT_VEC_WAIT;
+ //               next_state = S_JMP_TO_ISR;
+            end
+            
+            S_INT_VEC_WAIT: begin
+                next_state = S_JMP_TO_ISR;
+            end            
+            
+            // Jump to interrupt service routine
+            S_JMP_TO_ISR: begin
+                next_state = S_FETCH_OPCODE;
+            end            
             
             S_DECODE: begin
                 if (ir_opcode_reg == `OP_HALT)      next_state = S_HALTED;
-                else if (total_instr_bytes == 1)    next_state = S_EXECUTE;
+                else if (total_instr_bytes == 1)    next_state = S_EXECUTE;  // `OP_NOP, `OP_RET, `OP_EI, `OP_DI, `OP_RETI
                 else                                next_state = S_FETCH_OP1;
             end
             
@@ -215,6 +259,7 @@ module control_unit (
                     `OP_LOADBFR, `OP_STORBFR: next_state = S_MEM_ACCESS;
                     `OP_STORE, `OP_STORI, `OP_PUSH, `OP_CALL, `OP_OUTM, `OP_STORB, `OP_STORIB: next_state = S_MEM_ACCESS;
                     `OP_RET, `OP_STORFR: next_state = S_MEM_ACCESS;
+                    `OP_RETI: next_state = S_PCWREN;
                     `OP_LOADI: next_state = S_MEM_ACCESS;           // July 11, 2025; fix for pointers
 //                    `OP_LOADI: next_state = S_WRITEBACK;
 //                    `OP_LOADFR, `OP_LOADI: next_state = S_WRITEBACK;
@@ -230,14 +275,15 @@ module control_unit (
                         else begin
                             next_state = S_FETCH_OPCODE;
                         end
-                    `OP_JMP: next_state = S_BRANCH_DLY; 
-                    default: next_state = S_FETCH_OPCODE; // Jumps, CMP, NOP, RET, OUT
+                    `OP_JMP: next_state = S_BRANCH_DLY;
+                    // `OP_NOP, `OP_EI, `OP_DI
+                    default: next_state = S_FETCH_OPCODE; // NOP, OUT, EI, DI
                 endcase
                 
             // For Jumps, we need one clk delay to get new opcode loaded into ir_opcode_reg
             S_BRANCH_DLY:
                 case (ir_opcode_reg)
-                    `OP_RET: next_state = S_MEM_ACCESS;
+                    `OP_RET: next_state = S_MEM_ACCESS;     // TODO: Check this
                     default: next_state = S_FETCH_OPCODE;
                 endcase
                 
@@ -288,13 +334,55 @@ module control_unit (
         alu_src_b_sel_out = `ALU_B_SRC_REG; dmem_write_en_out = 1'b0; 
         mmio_rden = 1'b0;  dmem_byt_rden_out = 1'b0; dmem_byt_wrflg_out = 1'b0;
         dmem_addr_sel_out = `DMEM_ADDR_SRC_IMM; dmem_data_sel_out = `DMEM_DATA_SRC_RF1;
+        imem_addr_sel_out = `IMEM_ADDR_SRC_PC;
 //        dmem_byte_en_out = 1'b0;  // NEW: Default to word access
         sp_op_inc_out = 1'b0; sp_op_dec_out = 1'b0; flags_write_en_out = 1'b0;
-        gpio_out_we = 1'b0;
+//        reti_flags_sel_out = 1'b0;
+        gpio_out_we = 1'b0; 
+        enable_int_set=1'b0; enable_int_clr=1'b0;
+        save_pc_out = 1'b0;
 
         // --- Generate signals based on current FSM state ---
         case (current_state)
-            S_FETCH_OPCODE: begin pc_write_en_out = 1'b1; ir_opcode_load_en = 1'b1; end
+            S_FETCH_OPCODE: begin
+                // Check for Interrupts
+                if ( int_cond_met ) begin
+                    // Interrupt detected
+                    save_pc_out = 1'b1;
+                    enable_int_clr=1'b1;
+                end 
+                else begin 
+                    // normal instruction fetch             
+                    pc_write_en_out = 1'b1; 
+                    ir_opcode_load_en = 1'b1; 
+                end 
+            end
+            
+            // ---- Start of Interrupt entry sequence ----
+            // Read interrput vector address (low byte) from instruction memory
+            S_INT_VEC_GET_LOW: begin
+                imem_addr_sel_out=`IMEM_ADDR_SRC_IVT;  // IVT entry address
+            end
+            
+            // Read interrput vector address (High byte) from instruction memory
+            S_INT_VEC_GET_HI: begin
+                imem_addr_sel_out=`IMEM_ADDR_SRC_IVT;  // IVT entry address
+                pc_src_sel_out=`PC_SRC_IVT;            // IVT entry address
+            end
+            
+            S_INT_VEC_WAIT: begin
+                imem_addr_sel_out=`IMEM_ADDR_SRC_IVT;  // IVT entry address
+                pc_src_sel_out=`PC_SRC_IVT;            // IVT entry address
+                pc_write_en_out=1'b1;        // PC reg wren
+            end
+            
+            // Jump to ISR; load interrupt entry address into PC from IVT
+            S_JMP_TO_ISR: begin
+                pc_src_sel_out=`PC_SRC_IVT;  // IVT entry address
+                pc_write_en_out=1'b1;        // PC reg wren
+            end
+            // ---- End of Interrupt entry sequence ----          
+            
             S_FETCH_OP1:    begin pc_write_en_out = 1'b1; ir_operand1_load_en = 1'b1; end
             S_FETCH_OP2:    begin pc_write_en_out = 1'b1; ir_operand2_load_en = 1'b1; end
             S_FETCH_OP3:    begin pc_write_en_out = 1'b1; ir_operand3_load_en = 1'b1; end
@@ -309,7 +397,7 @@ module control_unit (
             end
 
             // Add states to this list that access the datatpath control signals
-            S_EXECUTE, S_MEM_ACCESS, S_WRITEBACK, S_RTN_ADDR, S_PCWREN: begin
+            S_EXECUTE, S_MEM_ACCESS, S_WRITEBACK, S_RTN_ADDR, S_PCWREN: begin                
                 // Decode operand fields first
                 // The first operand is always the destination
                 rf_dest_addr_out = ir_operand1_reg[`REG_ADDR_WIDTH-1:0];
@@ -523,7 +611,38 @@ module control_unit (
                               else if(current_state==S_RTN_ADDR) begin
                                   dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
                                   pc_src_sel_out=`PC_SRC_MEM;  
-                              end                 
+                              end  
+                              
+                    // ************************************************
+                    // TODO: Fix this opcode
+                    `OP_RETI:  if(current_state==S_EXECUTE) begin 
+//                                  sp_op_inc_out=1'b1; 
+//                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP; 
+                                  pc_src_sel_out=`PC_SRC_RESTORE; 
+                              end
+//                              else if(current_state==S_MEM_ACCESS) begin 
+//                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
+//                                  pc_src_sel_out=`PC_SRC_MEM; 
+//                              end
+                              else if(current_state==S_PCWREN) begin 
+//                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
+                                  pc_src_sel_out=`PC_SRC_RESTORE;
+                                  pc_write_en_out=1'b1; 
+                              end
+                              else if(current_state==S_RTN_ADDR) begin
+//                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
+                                  pc_src_sel_out=`PC_SRC_RESTORE; 
+                                  enable_int_set=1'b1;                   // enable interrupts: EI 
+                              end
+                   // ************************************************ 
+                              
+                   `OP_EI: if(current_state==S_EXECUTE) begin
+                              enable_int_set=1'b1;             // system level interrupt enable
+                    end     
+                    
+                   `OP_DI: if(current_state==S_EXECUTE) begin
+                              enable_int_clr=1'b1;            // system level interrupt disable
+                    end           
 
                     // 4 operand instructions (or 5 total bytes)
                     `OP_LOADFR: 
@@ -749,6 +868,36 @@ module control_unit (
             mmio_rden_out   <= mmio_rden_r;
         end
     end
+    
+    // Interrupt Control
+    // The interrupt register is a special case because there are two C-like
+    // built-in functions to enable or disable interrupts (enable_interrupts()
+    // and disable_interrupts()).
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            enable_int_out   <= 1'b0;
+        end 
+        else if (enable_int_set) begin
+            enable_int_out   <= 1'b1;
+        end
+        else if (enable_int_clr) begin
+            enable_int_out   <= 1'b0;
+        end
+    end 
+    
+    // Capture and save intrpt_in from PIC
+    // intrpt_in_sav
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            intrpt_in_sav   <= 1'b0;
+        end 
+        else if (intrpt_in) begin
+            intrpt_in_sav   <= 1'b1;
+        end
+        else if (enable_int_clr) begin
+            intrpt_in_sav   <= 1'b0;
+        end
+    end 
     
 
 //1. Data Transfer & Memory Operations
