@@ -79,6 +79,11 @@
 `define OP_POP      8'h61 // POP Rd (2 bytes)
 `define OP_CALL     8'h70 // CALL Addr16 (3 bytes)
 `define OP_RET      8'h71 // RET (1 byte)
+
+`define OP_EI       8'h72 // Enable Interrupts (1 byte)
+`define OP_DI       8'h73 // Disable Interrupts (1 byte)
+`define OP_RETI     8'h74 // Return from Interrupt (1 byte)
+
 `define OP_MOV      8'h80 // MOV Rd, Rs (3 bytes)
 `define OP_MOVFRSP  8'h81 // MOVFRSP Rd (2 bytes)
 `define OP_MOVTOSP  8'h82 // MOVTOSP Rs (2 bytes)
@@ -140,6 +145,8 @@
 `define PC_SRC_MEM          3'b010 // Value from data memory bus (for RET)
 `define PC_SRC_PC_CURRENT   3'b011 // PC = PC (for HALT)
 `define PC_SRC_ALU          3'b100 // Value from ALU result (for calculated jumps - future)
+`define PC_SRC_IVT          3'b101 // Interrupt vector address
+`define PC_SRC_RESTORE      3'b110 // Saved PC when entering Interrupt - restore value
 
 // ALU Operand A Source Selection (for alu_src_a_sel_out)
 `define ALU_A_SRC_REG       1'b0
@@ -159,10 +166,20 @@
 `define DMEM_ADDR_SRC_IMM   2'b00 // Direct address from instruction
 `define DMEM_ADDR_SRC_SP    2'b01 // From Stack Pointer
 `define DMEM_ADDR_SRC_ALU   2'b10 // From ALU result (LOADI, STORI)
+`define DMEM_ADDR_SRC_IVT   2'b11 // Interrupt, vector table address
 
 // Data Memory Data Source (for dmem_rtn_addr_sel)
 `define DMEM_DATA_SRC_RF1   2'b00 // From Register File, rf_src1
 `define DMEM_DATA_SRC_RF2   2'b01 // From Register File, rf_src2
 `define DMEM_DATA_SRC_PC    2'b10 // From PC
+
+// Instruction Memory Address Source (for imem_addr_sel_out)
+`define IMEM_ADDR_SRC_PC    1'b0  // Direct address from PC
+`define IMEM_ADDR_SRC_IVT   1'b1  // IVT_Base + irq_num<<1
+
+//================================================================
+// Interrut Vector 
+//================================================================
+`define IVT_BASE_ADDR       16'h0002
 
 `endif // DEFINES_SVH
