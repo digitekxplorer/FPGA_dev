@@ -37,8 +37,8 @@ import mmio_reg_pkg::*;
 `include "abcore_interfaces.sv" // INCLUDE INTERFACES FILE
 
 // For Synthesis, comment out both defines
-`define MEMORYMODELSIM    // use hex file
-`define SIMSPEEDUPCLK     // use Testbench 12MHz clock
+//`define MEMORYMODELSIM    // use hex file
+//`define SIMSPEEDUPCLK     // use Testbench 12MHz clock
 
 // --- FOR SIMULATION: Use a fast, behavioral memory model ---
 // Remember: Must add new coe and hex files to abCore16 project as Coefficient 
@@ -62,8 +62,8 @@ import mmio_reg_pkg::*;
 //`define IMEM_HEX_FILE "test_char.hex"  // test char data type
 //`define IMEM_HEX_FILE "test_loadb_storb.hex"  // Test byte instructions
 //`define IMEM_HEX_FILE "test_loadbfr_storbfr.hex"  // Test byte instructions, frame relative
-//`define IMEM_HEX_FILE "test_uart.hex"  // UART at 115,200 baud
-`define IMEM_HEX_FILE "test_interrupt.hex"   // Interrupt testing
+`define IMEM_HEX_FILE "test_uart.hex"  // UART at 115,200 baud
+//`define IMEM_HEX_FILE "test_interrupt.hex"   // Interrupt testing
 
 module cpu_tl (
     input  logic clk_12MHz,
@@ -117,6 +117,12 @@ logic [15:0]            dmem_word_data_fsm;
 logic [`DATA_WIDTH-1:0] gpio_in_i;
 assign gpio_in_i = gpio_out_o;
 
+// Debug
+logic [60:0] dbg_bus_pic;     // 61 signals
+logic [20:0] dbg_bus_cu;      // 21 signals
+logic [19:0] dbg_bus_dp;      // 14 signals 
+                              // 96
+
     
 //================================================================
 // Conditional Clock Module Instantiation
@@ -150,9 +156,15 @@ assign rst_n = locked;
 //================================================================
 // Instantiate the interfaces that will bundle signals between modules.
 // Pass the system clock and reset to them.
+// Instantiate the interfaces that will bundle signals between modules.
+// Pass the system clock and reset to them.
 timer_if timer_bus ( .clk(clk), .rst_n(rst_n) );
 uart_if  uart_bus  ( .clk(clk), .rst_n(rst_n) );
-pic_if   pic_bus   ( .clk(clk), .rst_n(rst_n) );
+
+// NEW: Simplified PIC interfaces
+pic_if      pic_cpu_bus  ( .clk(clk), .rst_n(rst_n) );   // PIC to CPU signals
+pic_mmio_if pic_mmio_bus ( .clk(clk), .rst_n(rst_n) );   // PIC to MMIO signals
+
 // --- CPU Bus Interfaces ---
 imem_bus_if imem_bus ( .clk(clk), .rst_n(rst_n) );
 dmem_bus_if dmem_bus ( .clk(clk), .rst_n(rst_n) );
@@ -190,28 +202,36 @@ assign gpio_out_we_o = gpio_bus.wren;
 core core01 (
     .clk          (clk),
     .rst_n        (rst_n),
-    .imem_bus     (imem_bus.master),     // instruction bus interface
-    .dmem_bus     (dmem_bus.master),     // data bus interface
-    .gpio_bus     (gpio_bus.cpu),        // gpio bus interface
-    .pic_bus      (pic_bus.controller),  // PIC interface
-    .enable_int_o (enable_int),          // enable interrupts
+    .imem_bus     (imem_bus.master),     
+    .dmem_bus     (dmem_bus.master),     
+    .gpio_bus     (gpio_bus.cpu),        
+    .pic_bus      (pic_cpu_bus.cpu),     // Only CPU-relevant PIC signals
+    .enable_int_o (enable_int),  
+    // debug
+    .dbg_bus_cu   (dbg_bus_cu),      // 21 signals
+    .dbg_bus_dp   (dbg_bus_dp),      // 14 signals         
     .halted_o     (halted_o)
 );
+
+
+    // debug
+//    .dbg_bus_cu   (dbg_bus_cu),      // 21 signals
+//    .dbg_bus_dp   (dbg_bus_dp),      // 14 signals 
 
 // --- Memory-mapped IO Registers ---
 // Use CPU data bus to access memory-mapped registers.
 mmio_regs mmio_regs01 (
     .clk                    (clk),
     .rst_n                  (rst_n),
-    .dmem_bus               (dmem_bus.slave),        // cpu interface (data bus)
-    .timer_bus              (timer_bus.controller),  // timer interface
-    .uart_bus               (uart_bus.controller),   // uart interface
-    .pic_bus                (pic_bus.controller),    // PIC interface
+    .dmem_bus               (dmem_bus.mmio_reader),      // CHANGED: New modport
+    .timer_bus              (timer_bus.controller),     // timer interface
+    .uart_bus               (uart_bus.controller),      // uart interface
+    .pic_mmio_bus           (pic_mmio_bus.mmio),         // CHANGED: New PIC interface
     .memorymap_range        (memorymap_range),
     .mmio_rd_data_o         (mmio_rd_data),
     .mmio_rd_valid_o        (mmio_rd_valid),
     .uart_rx_access_o       (uart_rx_access),
-    .eoi_update_o           (eoi_update),
+    // REMOVED: .eoi_update_o (eoi_update),               // Now part of pic_mmio_bus
     .led_ctrl_o             (led_ctrl)
 );
 
@@ -254,23 +274,43 @@ end
 
 
 // --- Programmable Interrupt Controller (PIC) Module Instantiation ---
-//logic [15:0] irq;       // Interrupt request lines from peripherals
-//assign irq = '0;
+logic [15:0] device_irqs;       // Interrupt request lines from peripherals
 
 // Assign interrupts to PIC
 logic int0_timeout;
+logic int1_timeout;
+logic int2_timeout;
 logic int1_uartrx;
 assign int0_timeout = timer_bus.timeout;
 assign int1_uartrx = uart_bus.rx_fifo_avail;
-assign pic_bus.peripheral.irq = {14'h0, int1_uartrx, int0_timeout};  // Interrupt request lines from peripherals
+//assign pic_bus.peripheral.irq = {14'h0, int1_uartrx, int0_timeout};  // Interrupt request lines from peripherals
+//assign pic_bus.peripheral.irq = {13'h0, int2_timeout, int1_timeout, int0_timeout};  // Interrupt request lines from peripherals
+// assign pic_bus.peripheral.irq = {15'h0, int0_timeout};   // Cannot resolve
+assign device_irqs = {15'h0, int0_timeout};
 pic pic01 (
-    // Connect the peripheral side of the interface
-    .pic_bus      (pic_bus.peripheral),     // PIC interface
-    .enable_int_i (enable_int),             // enable interrupts
-//    .irq_i        (irq),       // Interrupt request lines from peripherals
-    .eoi_update_i (eoi_update)
+    .clk             (clk),
+    .rst_n           (rst_n),
+    .pic_cpu_bus     (pic_cpu_bus.pic),      // CPU interface
+    .pic_mmio_bus    (pic_mmio_bus.pic),     // MMIO interface  
+    .enable_int_i    (enable_int),           
+    .irq_i           ({15'h0, int0_timeout}), // Direct connection
+    .dbg_bus_pic     (dbg_bus_pic)     
 );
 
+
+// Int 1 Shifter
+logic [15:0] int01_shft;
+always_ff@(posedge clk) begin
+   if(!rst_n) begin
+       int01_shft  <= 16'h0;          
+   end
+   else begin 
+       int01_shft  <= { int01_shft[14:0], int0_timeout };
+   end
+end
+// create a delayed versions of int0_timeout
+assign int1_timeout = int01_shft[15];  // Int#1
+assign int2_timeout = int01_shft[5];  // Int#2
 
 //================================================================
 // Conditional Memory Instantiation
@@ -642,12 +682,22 @@ end
 //================================================================
 // ILA INSTANTIATION
 //================================================================
+// Debug
+//logic [60:0] dbg_bus_pic;     // 61 signals
+//logic [20:0] dbg_bus_cu;      // 21 signals
+//logic [19:0] dbg_bus_dp;      // 14 signals 
 //--- ILA_0  ---
-logic [31:0] probe0;
+logic [105:0] probe0;
 // The ILA probe uses the dmem_bus interface signals
-assign probe0[31:0] = { dmem_bus.addr[8:0], uart_bus.rx_data, uart_bus.tx_data, uart_tx_o, uart_rx_sync, 
-                        uart_bus.tx_start, 1'b0, uart_bus.rx_fifo_avail,
-                        dmem_bus.wren, led3_o };
+//assign probe0[31:0] = { dmem_bus.addr[8:0], uart_bus.rx_data, uart_bus.tx_data, uart_tx_o, uart_rx_sync, 
+//                        uart_bus.tx_start, 1'b0, uart_bus.rx_fifo_avail,
+//                        dmem_bus.wren, led3_o };
+
+assign probe0 = { led3_o, uart_bus.tx_start, uart_bus.rx_fifo_avail, dmem_bus.wren,
+                  dbg_bus_pic, dbg_bus_cu, dbg_bus_dp };
+                  
+//assign probe0 = { led3_o, uart_bus.tx_start, uart_bus.rx_fifo_avail, dmem_bus.wren,
+//                  96'h0 };
 
 ila_0 ab_ILA (
 	.clk     (clk),
