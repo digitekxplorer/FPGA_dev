@@ -27,9 +27,8 @@ module uart_mn #(
     uart_if.peripheral       uart_bus,
     
     input  logic             i_tx_start_manual,
-    input  logic             i_uart_rx_access,     // Uart RX addr selected for access
-    gpio_bus_if.peripheral   gpio_bus,             // gpio and mmio interface
-//    input  logic             i_mmio_rden,          // memory read Rd = Mem[Rs_addr]
+    input  logic             i_uart_rx_access,     // Uart RX addr selected for access, from mmio_regs.sv
+    gpio_bus_if.peripheral   gpio_bus,             // gpio and mmio interface, from control_unit.sv
     output logic             o_uart_tx,
     input  logic             i_uart_rx
 );
@@ -48,10 +47,8 @@ module uart_mn #(
     logic       tx_fifo_wr_en;
     
     // RX FIFO signals
- //   logic [7:0] rx_fifo_din;
     logic       rx_fifo_empty;
     logic       rx_fifo_full;
-//    logic       rx_fifo_rd_en;
     logic       rx_fifo_wr_en;
     
     // TX Control signals
@@ -116,12 +113,7 @@ module uart_mn #(
     assign tx_data_available = ~tx_fifo_empty;
     
     // FIFO read enable: assert during READ_FIFO state
-//    assign tx_fifo_rd_en = (tx_state == TX_READ_FIFO) & tx_data_available;
     assign tx_fifo_rd_en = tx_fifo_rden_fsm & tx_data_available;
-    
-    // TX start: use registered signal or manual start
-    // moved down where TX_IDLE is defined
-//    assign tx_start_internal = tx_fifo_rden_fsm | (i_tx_start_manual & (tx_state == TX_IDLE));
     
     // Connect interface outputs for TX status - indicate FIFO availability
     assign uart_bus.tx_fifo_avail = ~tx_fifo_full;  // High when FIFO can accept data
@@ -129,10 +121,6 @@ module uart_mn #(
     // -- RX FIFO Control Logic --
     // Write to RX FIFO when valid data is received and FIFO is not full
     assign rx_fifo_wr_en = rx_data_valid_internal & ~rx_fifo_full;
-//    assign rx_fifo_din = rx_data_internal;
-    
-    // Read from RX FIFO is controlled by the interface
- //   assign rx_fifo_rd_en = uart_bus.rx_fifo_avail & ~rx_fifo_empty;  // Assuming interface provides read enable
     
     // Connect interface outputs for RX
     // assign uart_bus.rx_data = rx_fifo_empty ? 8'h00 : uart_bus.rx_data;  // You may want to connect FIFO output here
@@ -164,7 +152,6 @@ module uart_mn #(
             
             case (tx_state)
                 TX_IDLE: begin
-//                    if (tx_data_available || i_tx_start_manual) begin
                     if ((tx_data_available || i_tx_start_manual) && !tx_busy_internal) begin
                         tx_state <= TX_READ_FIFO;
                     end
@@ -199,19 +186,6 @@ module uart_mn #(
     
     // TX start: use registered signal or manual start
     assign tx_start_internal = tx_fifo_rden_fsm | (i_tx_start_manual & (tx_state == TX_IDLE));
-    
-    
-    // UART TX Fifo
-//    uart_fifo uart_tx_fifo (
-//        .clk    (uart_bus.clk),         // input wire clk
-//        .srst   (!uart_bus.rst_n),      // input wire srst
-//        .din    (uart_bus.tx_data),     // input wire [7 : 0] din
-//        .wr_en  (tx_fifo_wr_en),        // input wire wr_en
-//        .rd_en  (tx_fifo_rd_en),        // input wire rd_en
-//        .dout   (tx_fifo_dout),         // output wire [7 : 0] dout
-//        .full   (tx_fifo_full),         // output wire full
-//        .empty  (tx_fifo_empty)         // output wire empty
-//    );
     
     logic tx_fifo_prog_full;
     uart_fifo uart_tx_fifo (
@@ -260,7 +234,7 @@ module uart_mn #(
         if (!uart_bus.rst_n) begin
             rx_state <= RX_IDLE;
             rx_fifo_rden_fsm <= 1'b0;
-            rx_data_valid_fsm <= 1'b0;
+            rx_data_valid_fsm <= 1'b0;     // currently not used
         end else begin
             rx_fifo_rden_fsm <= 1'b0;  // Default
             rx_data_valid_fsm <= 1'b0;  // Default
@@ -270,8 +244,7 @@ module uart_mn #(
 //                    if (~rx_fifo_empty) begin
                     // Is cpu accessing RX Uart Fifo with a read enable?
                     // This means cpu read from the RX Uart Fifo
-                    // Use gpio_bus interface to access mmio_rden
-                    // timer_bus.prescale_en
+                    // Use gpio_bus interface to access mmio_rden; memory read Rd = Mem[Rs_addr]
                     if (i_uart_rx_access && gpio_bus.mmio_rden) begin
                         rx_state <= RX_READ_FIFO;
                     end
