@@ -31,6 +31,7 @@ module datapath (
     // Instruction Memory
     input  logic [7:0]             imem_rdata_i,     // interrupt vector address
     input  logic                   grant_vec_i,      // granted interrupt number
+    input  logic                   intrpt_i,         // interrupt
     output logic [`ADDR_WIDTH-1:0] pc_to_imem_addr,
 
     // Control Signals from Control Unit
@@ -64,6 +65,10 @@ module datapath (
     // GPIO Interface
     input  logic [`DATA_WIDTH-1:0] gpio_in_data_bus,
     output logic [`DATA_WIDTH-1:0] gpio_out_data_bus,
+    
+    // Debug
+        // Debug
+    output logic [19:0] dbg_bus_dp,
 
     // Outputs to Control Unit (Flags)
     output logic                   ZF_to_cu, SF_to_cu, CF_to_cu, OF_to_cu,
@@ -128,12 +133,13 @@ logic                   imem_addr_sel_redge;
     end
     
     // Capture interrupt number in service
+    // grant_vec_i from pic.sv
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin; 
             irq_vec_sav   <= 3'h0;  // interrupt number
         end
         // save the interrupt number when irq is granted
-        else if (pic_bus.intrpt) begin
+        else if (intrpt_i) begin
             irq_vec_sav   <=  grant_vec_i;  // IVT_BASE + (irq_num << 1)
         end
         // get ready for next interrupt
@@ -379,5 +385,23 @@ logic                   imem_addr_sel_redge;
     // Register-based jump condition flags to CU
     assign reg_is_zero_to_cu = (rf_rdata1 == 16'b0);
     assign reg_is_neg_to_cu  = rf_rdata1[15];
+    
+    //================================================================
+    // Debug
+    //================================================================
+    
+// ZF_to_cu, SF_to_cu, CF_to_cu, OF_to_cu,
+// reg_is_zero_to_cu,
+// reg_is_neg_to_cu
+    
+    // assign debug bus; 14 signals [13:0]
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            dbg_bus_dp <= '0;
+        end
+        else begin 
+            dbg_bus_dp <= { reg_is_neg_to_cu, reg_is_zero_to_cu, ZF_to_cu, SF_to_cu, CF_to_cu, OF_to_cu, pc_reg[13:0] };
+       end
+    end
 
 endmodule
