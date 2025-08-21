@@ -15,6 +15,8 @@
 // Memory-mapped functionality has been extracted into a separate core_regs module.
 //
 // Revision:
+// Revision 1.5 - Fixed multiple driver issues by using continuous assignments
+//                for read-only registers that directly reflect hardware state.
 // Revision 1.4 - Refactored to use timer_if and uart_if interfaces.
 // Revision 1.3 - Extracted memory-mapped registers into separate core_regs module
 // Revision 1.2 - Extracted timer functionality into separate module
