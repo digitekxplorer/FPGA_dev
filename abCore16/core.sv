@@ -30,14 +30,20 @@ module core (
     imem_bus_if.master imem_bus,
     dmem_bus_if.master dmem_bus,
     gpio_bus_if.cpu    gpio_bus,
-    pic_if.controller  pic_bus,
+    pic_if.cpu         pic_bus,
     // Interrupt enable
     output logic       enable_int_o,
 	// CPU dmem read including mmio registers
 //	output logic      mmio_rden_o,          // memory read Rd = Mem[Rs_addr]
+    // Debug
+    output logic [20:0] dbg_bus_cu,      // 21 signals
+    output logic [13:0] dbg_bus_dp,      // 14 signals 
     // CPU halt flag
     output logic       halted_o
 );
+
+//logic [20:0] dbg_bus_cu;      // 21 signals
+//logic [13:0] dbg_bus_dp;      // 14 signals 
 
     //================================================================
     // Internal Wires for CPU buses
@@ -125,6 +131,7 @@ module core (
         .rst_n(rst_n),
         .imem_rdata_i(imem_rdata_i),   // instruction data for interrupts
         .grant_vec_i(pic_bus.grant_vec), // granted interrupt number
+        .intrpt_i(pic_bus.intrpt),       // interrupt
         .pc_to_imem_addr(imem_addr_o),
         
         // Control signals from CU
@@ -159,6 +166,9 @@ module core (
         .gpio_in_data_bus(gpio_in_i),
         .gpio_out_data_bus(gpio_out_o),
         
+        // Debug
+        .dbg_bus_dp(dbg_bus_dp),
+        
         // Outputs to CU
         .ZF_to_cu(zf_from_dp),
         .SF_to_cu(sf_from_dp),
@@ -182,6 +192,7 @@ module core (
         .reg_is_zero_in(reg_is_zero_from_dp),
         .reg_is_neg_in(reg_is_neg_from_dp),
         .intrpt_in(pic_bus.intrpt),
+        .pending_int_in(pic_bus.pending_int),
 
         // Outputs to DP
         .pc_write_en_out(pc_write_en_to_dp),
@@ -210,7 +221,8 @@ module core (
         .save_pc_out(save_pc_o),
         // GPIO output
         .gpio_out_we_out(gpio_out_we_o),
-        
+        // Debug
+        .dbg_bus_cu(dbg_bus_cu),
         // Halted flag
         .halted_o(halted_o)
     );
