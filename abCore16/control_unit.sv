@@ -43,6 +43,7 @@ module control_unit (
     input  logic       reg_is_neg_in,
     
     input  logic       intrpt_in,
+    input  logic       pending_int_in,
 
     // --- Outputs to Datapath ---
     // PC Control
@@ -81,6 +82,8 @@ module control_unit (
     output logic       save_pc_out,
     // GPIO Control
     output logic       gpio_out_we_out,
+    // Debug
+    output logic [20:0] dbg_bus_cu,
     
     // Halted flag
     output logic       halted_o
@@ -111,8 +114,6 @@ module control_unit (
     
     logic       mmio_rden;
     
-//    logic       dmem_byte_en_out;     // NEW: Enable byte access mode
-
     //================================================================
     // FSM State Definition
     //================================================================
@@ -172,7 +173,8 @@ module control_unit (
     // Combinational Logic Part 2: FSM Next State Logic
     //================================================================
     // Interrupt condition met
-    assign int_cond_met = enable_int_out && intrpt_in_sav;
+//    assign int_cond_met = enable_int_out && intrpt_in_sav;
+    assign int_cond_met = enable_int_out && pending_int_in;
     
     always_comb begin
         next_state = current_state; 
@@ -991,6 +993,19 @@ module control_unit (
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) halted_o <= 1'b0;
         else        halted_o <= (current_state == S_HALTED);
+    end
+    
+    //================================================================
+    // Debug
+    //================================================================
+    // assign debug bus; 21 signals [20:0]
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            dbg_bus_cu <= '0;
+        end
+        else begin 
+            dbg_bus_cu <= { 3'b000, enable_int_out, mmio_rden_out, int_cond_met, intrpt_in, pending_int_in , current_state[4:0] ,ir_opcode_reg[7:0]};
+       end
     end
 
 endmodule
