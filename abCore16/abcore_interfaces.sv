@@ -42,18 +42,20 @@ interface dmem_bus_if (input logic clk, input logic rst_n);
 
     // View from the CPU (bus master)
     modport master (
-        output wren,
-        output addr,
-        output wdata,
+        output wren, addr, wdata,
         input  rdata
     );
 
-    // View from the Memory/Peripherals (bus slave)
+    // View from Memory that drives rdata (like BRAM)
     modport slave (
-        input  wren,
-        input  addr,
-        input  wdata,
+        input  wren, addr, wdata,
         output rdata
+    );
+    
+    // NEW: View from MMIO that only READS bus signals, never drives rdata
+    modport mmio_reader (
+        input  wren, addr, wdata
+        // Note: NO rdata connection - MMIO provides data through separate output
     );
 endinterface
 
@@ -87,33 +89,48 @@ interface gpio_bus_if (input logic clk, input logic rst_n);
 endinterface
 
 // --- Programmable Interrupt Controller (PIC) Bus Interface ---
+// SIMPLIFIED PIC Interface - Only signals that cross module boundaries
 interface pic_if (input logic clk, input logic rst_n);
-    logic [15:0] irr;       // Interrupt Request Register
-    logic [15:0] imr;       // Interrupt Mask Register
-    logic [15:0] isr;       // In-Service Register
-    logic [ 3:0] irq_num;   // irq number for End-of-Interrupt
-    // Interrupt interface
-    logic [15:0] irq;       // Interrupt request lines from peripherals
-    logic [ 3:0] grant_vec; // Grant interrupt vector; in-service number
-    logic        intrpt;    // Master interrupt signal to CPU
-
-
-    // View from the CPU (controller)
-    modport controller (
-        input  clk, rst_n, irr, isr, grant_vec, intrpt,
-        //
-        output imr, irq_num
+    // Signals from PIC to CPU
+    logic [ 3:0] grant_vec;    // Grant interrupt vector to CPU
+    logic        intrpt;       // Master interrupt signal to CPU
+    logic        pending_int;  // Pending interrupt status to CPU
+    
+    // CPU uses these signals (connected in core.sv)
+    modport cpu (
+        input  grant_vec, intrpt, pending_int
     );
     
-    // View from the device (MMIO peripheral)
-    modport peripheral (
-        input  clk, rst_n, imr, irq_num, irq,
-        //
-        output irr, isr, grant_vec, intrpt
+    // PIC drives these signals
+    modport pic (
+        output grant_vec, intrpt, pending_int
     );
-       
 endinterface
 
+
+// SEPARATE interface for MMIO register access to PIC
+interface pic_mmio_if (input logic clk, input logic rst_n);
+    // PIC status registers (from PIC to MMIO)
+    logic [15:0] irr;          // Interrupt Request Register  
+    logic [15:0] isr;          // In-Service Register
+    
+    // PIC control registers (from MMIO to PIC)
+    logic [15:0] imr;          // Interrupt Mask Register
+    logic [ 3:0] eoi_irq_num;  // EOI IRQ number
+    logic        eoi_update;   // EOI update pulse
+    
+    // MMIO controller side
+    modport mmio (
+        input  irr, isr,                           // Read status from PIC
+        output imr, eoi_irq_num, eoi_update       // Control signals to PIC
+    );
+    
+    // PIC peripheral side  
+    modport pic (
+        output irr, isr,                          // Status to MMIO
+        input  imr, eoi_irq_num, eoi_update      // Control from MMIO
+    );
+endinterface
 
 // ******************************
 
