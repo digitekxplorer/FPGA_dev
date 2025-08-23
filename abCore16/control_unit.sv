@@ -17,6 +17,7 @@
 // Dependencies: `defines.svh`
 // 
 // Revision:
+// Revision 1.2 - Multiple interrupts (Timer & UART) work
 // Revision 1.1 - Added byte-access instructions: LOADB, STORB, LOADIB, STORIB
 // Revision 1.0 - Created to be compatible with the reverted DP-centric datapath.
 //
@@ -72,7 +73,6 @@ module control_unit (
     output logic       dmem_byt_wrflg_out,    // data memory byte write
     output logic [1:0] dmem_addr_sel_out,
     output logic [1:0] dmem_data_sel_out,
-    output logic       imem_addr_sel_out,
 //    output logic       dmem_byte_en_out,     // NEW: Enable byte access mode
     // Stack Pointer Control
     output logic       sp_op_inc_out,
@@ -118,9 +118,8 @@ module control_unit (
     // FSM State Definition
     //================================================================
     typedef enum logic [4:0] { 
-        S_RESET, S_FETCH_OPCODE, 
-        S_DECODE,
-        S_INT_VEC_GET_LOW, S_INT_VEC_GET_HI, S_INT_VEC_WAIT, S_JMP_TO_ISR,
+        S_RESET, S_FETCH_OPCODE, S_DECODE,
+        S_INT_VEC_GET, S_INT_VEC_WAIT, S_JMP_TO_ISR,
         S_FETCH_OP1, S_FETCH_OP2, S_FETCH_OP3, S_FETCH_OP4,
         S_BRAM_DLY, S_BRANCH_DLY, // ab: one clk delays
         S_RTN_ADDR,
@@ -173,7 +172,6 @@ module control_unit (
     // Combinational Logic Part 2: FSM Next State Logic
     //================================================================
     // Interrupt condition met
-//    assign int_cond_met = enable_int_out && intrpt_in_sav;
     assign int_cond_met = enable_int_out && pending_int_in;
     
     always_comb begin
@@ -181,25 +179,18 @@ module control_unit (
         case(current_state)
             S_RESET:        next_state = S_FETCH_OPCODE;
             
-//            S_FETCH_OPCODE: next_state = S_DECODE;
             S_FETCH_OPCODE: begin
                 if ( int_cond_met ) begin
                     // Interrupt detected
-//                    save_pc_out = 1'b1;
-                    next_state = S_INT_VEC_GET_LOW; 
+                    next_state = S_INT_VEC_GET; 
                 end
                 else begin
                     next_state = S_DECODE; 
                 end
             end
             
-            S_INT_VEC_GET_LOW: begin
-                next_state = S_INT_VEC_GET_HI;
-            end
-            
-            S_INT_VEC_GET_HI: begin
+            S_INT_VEC_GET: begin
                 next_state = S_INT_VEC_WAIT;
- //               next_state = S_JMP_TO_ISR;
             end
             
             S_INT_VEC_WAIT: begin
@@ -263,9 +254,6 @@ module control_unit (
                     `OP_RET, `OP_STORFR: next_state = S_MEM_ACCESS;
                     `OP_RETI: next_state = S_PCWREN;
                     `OP_LOADI: next_state = S_MEM_ACCESS;           // July 11, 2025; fix for pointers
-//                    `OP_LOADI: next_state = S_WRITEBACK;
-//                    `OP_LOADFR, `OP_LOADI: next_state = S_WRITEBACK;
-//                    `OP_LOADFR: next_state = S_WRITEBACK;
                     `OP_LOADFR: next_state = S_MEM_ACCESS;                        // TODO: check
                     `OP_L_AND, `OP_L_OR, `OP_L_NOT: next_state = S_WRITEBACK;
                     `OP_LOAD, `OP_ADD, `OP_SUB, `OP_CMP, `OP_MUL, `OP_INC, `OP_DEC, `OP_AND, `OP_OR, `OP_XOR, `OP_NOT,
@@ -336,10 +324,7 @@ module control_unit (
         alu_src_b_sel_out = `ALU_B_SRC_REG; dmem_write_en_out = 1'b0; 
         mmio_rden = 1'b0;  dmem_byt_rden_out = 1'b0; dmem_byt_wrflg_out = 1'b0;
         dmem_addr_sel_out = `DMEM_ADDR_SRC_IMM; dmem_data_sel_out = `DMEM_DATA_SRC_RF1;
-        imem_addr_sel_out = `IMEM_ADDR_SRC_PC;
-//        dmem_byte_en_out = 1'b0;  // NEW: Default to word access
         sp_op_inc_out = 1'b0; sp_op_dec_out = 1'b0; flags_write_en_out = 1'b0;
-//        reti_flags_sel_out = 1'b0;
         gpio_out_we = 1'b0; 
         enable_int_set=1'b0; enable_int_clr=1'b0;
         save_pc_out = 1'b0;
@@ -360,27 +345,22 @@ module control_unit (
                 end 
             end
             
-            // ---- Start of Interrupt entry sequence ----
-            // Read interrput vector address (low byte) from instruction memory
-            S_INT_VEC_GET_LOW: begin
-                imem_addr_sel_out=`IMEM_ADDR_SRC_IVT;  // IVT entry address
-            end
-            
-            // Read interrput vector address (High byte) from instruction memory
-            S_INT_VEC_GET_HI: begin
-                imem_addr_sel_out=`IMEM_ADDR_SRC_IVT;  // IVT entry address
-                pc_src_sel_out=`PC_SRC_IVT;            // IVT entry address
+            // ---- Start of Interrupt entry sequence ----           
+            // Read interrput vector address from data memory (IVT)
+            S_INT_VEC_GET: begin
+                dmem_addr_sel_out=`DMEM_ADDR_SRC_IVT;  // IVT entry address
+                pc_src_sel_out=`PC_SRC_MEM;            // IVT entry address
             end
             
             S_INT_VEC_WAIT: begin
-                imem_addr_sel_out=`IMEM_ADDR_SRC_IVT;  // IVT entry address
-                pc_src_sel_out=`PC_SRC_IVT;            // IVT entry address
+                dmem_addr_sel_out=`DMEM_ADDR_SRC_IVT;  // IVT entry address
+                pc_src_sel_out=`PC_SRC_MEM;            // IVT entry address
                 pc_write_en_out=1'b1;        // PC reg wren
             end
             
             // Jump to ISR; load interrupt entry address into PC from IVT
             S_JMP_TO_ISR: begin
-                pc_src_sel_out=`PC_SRC_IVT;  // IVT entry address
+                pc_src_sel_out=`PC_SRC_MEM;  // IVT entry address
                 pc_write_en_out=1'b1;        // PC reg wren
             end
             // ---- End of Interrupt entry sequence ----          
@@ -551,13 +531,11 @@ module control_unit (
                                else if(current_state==S_MEM_ACCESS) begin  
                                    dmem_addr_sel_out=`DMEM_ADDR_SRC_IMM;
                                    dmem_byt_rden_out=1'b1;                    // Read byte 
-//                                   dmem_byte_en_out=1'b1;                   // Enable byte access
                                end
                                else if(current_state==S_WRITEBACK) begin 
                                    rf_write_en_out=1'b1; 
                                    rf_write_data_sel_out=`WB_SRC_MEM;
                                    dmem_byt_rden_out=1'b1;                    // Read byte 
-//                                   dmem_byte_en_out=1'b1;                   // Enable byte access
                                end
 
                     `OP_PUSH: if(current_state==S_EXECUTE)   begin 
@@ -616,23 +594,14 @@ module control_unit (
                               end  
                               
                     // ************************************************
-                    // TODO: Fix this opcode
                     `OP_RETI:  if(current_state==S_EXECUTE) begin 
-//                                  sp_op_inc_out=1'b1; 
-//                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP; 
                                   pc_src_sel_out=`PC_SRC_RESTORE; 
                               end
-//                              else if(current_state==S_MEM_ACCESS) begin 
-//                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
-//                                  pc_src_sel_out=`PC_SRC_MEM; 
-//                              end
                               else if(current_state==S_PCWREN) begin 
-//                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
                                   pc_src_sel_out=`PC_SRC_RESTORE;
                                   pc_write_en_out=1'b1; 
                               end
                               else if(current_state==S_RTN_ADDR) begin
-//                                  dmem_addr_sel_out=`DMEM_ADDR_SRC_SP;
                                   pc_src_sel_out=`PC_SRC_RESTORE; 
                                   enable_int_set=1'b1;                   // enable interrupts: EI 
                               end
@@ -701,7 +670,6 @@ module control_unit (
                             alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
                             rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
                             dmem_byt_rden_out=1'b1;                    // Read byte 
-//                            dmem_byte_en_out=1'b1;                 // Enable byte access
                         end
                         else if(current_state==S_MEM_ACCESS) begin 
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
@@ -710,7 +678,6 @@ module control_unit (
                             alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
                             rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
                             dmem_byt_rden_out=1'b1;                    // Read byte 
-//                            dmem_byte_en_out=1'b1;                 // Enable byte access
                         end
                         else if(current_state==S_WRITEBACK) begin 
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
@@ -719,7 +686,6 @@ module control_unit (
                             alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
                             rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
                             dmem_byt_rden_out=1'b1;                    // Read byte 
-//                            dmem_byte_en_out=1'b1;                 // Enable byte access
                             // write to Register File
                             rf_write_en_out=1;                     // write to Rd
                         end
@@ -735,7 +701,6 @@ module control_unit (
                             // data out to DMEM
                             dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt
                             dmem_byt_wrflg_out=1'b1;                // data memory byte read
-//                            dmem_byte_en_out=1'b1;                 // Enable byte access
                         end
                         else if(current_state==S_MEM_ACCESS) begin 
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
@@ -745,7 +710,6 @@ module control_unit (
                             // data out to DMEM
                             dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt
                             dmem_byt_wrflg_out=1'b1;                // data memory byte read
-//                            dmem_byte_en_out=1'b1;                 // Enable byte access
                             // write to DMEM
                             dmem_write_en_out=1'b1;                // write to dmem
                         end                        
@@ -806,7 +770,6 @@ module control_unit (
                             alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs
                             rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
                             dmem_byt_rden_out=1'b1;                // data memory byte read
-//                            dmem_byte_en_out=1'b1;                 // Enable byte access
                             mmio_rden = 1'b1;                      // read from dmem including mmio registers
                         end
                         else if(current_state==S_MEM_ACCESS) begin  
@@ -815,7 +778,6 @@ module control_unit (
                             alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs
                             rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
                             dmem_byt_rden_out=1'b1;                // data memory byte read
-//                            dmem_byte_en_out=1'b1;                 // Enable byte access
                         end
                         else if(current_state==S_WRITEBACK) begin 
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;
@@ -823,7 +785,6 @@ module control_unit (
                             alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs
                             rf_write_data_sel_out=`WB_SRC_MEM;     // sel dmem_rdata_in
                             dmem_byt_rden_out=1'b1;                // data memory byte read
-//                            dmem_byte_en_out=1'b1;                 // Enable byte access
                             // write to Register File
                             rf_write_en_out=1;                     // write to Rd
                         end
@@ -838,7 +799,6 @@ module control_unit (
                             // data out to DMEM
                             dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt_val
                             dmem_byt_wrflg_out=1'b1;                // data memory byte read
-//                            dmem_byte_en_out=1'b1;                 // Enable byte access
                         end
                         else if(current_state==S_MEM_ACCESS) begin 
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;  // alu_result_internal
@@ -847,7 +807,6 @@ module control_unit (
                             // data out to DMEM
                             dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt_val
                             dmem_byt_wrflg_out=1'b1;                // data memory byte read
-//                            dmem_byte_en_out=1'b1;                 // Enable byte access
                             // write to DMEM
                             dmem_write_en_out=1'b1;                // write to dmem
                         end 
