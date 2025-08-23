@@ -17,6 +17,8 @@
 // Dependencies: `defines.svh`, `alu.sv`
 // 
 // Revision:
+// Revision 1.2 - Multiple interrupts (Timer & UART) work
+// Revision 1.1 - Fixed problem with flags that caused interrupts to stop working
 // Revision 1.1 - Reverted to original architecture and synced with latest defines.
 //
 //////////////////////////////////////////////////////////////////////////////////
@@ -28,10 +30,10 @@ module datapath (
     input  logic clk,
     input  logic rst_n,
 
-    // Instruction Memory
-    input  logic [7:0]             imem_rdata_i,     // interrupt vector address
-    input  logic                   grant_vec_i,      // granted interrupt number
+    // Interrupts
+    input  logic [3:0]             grant_vec_i,      // granted interrupt number
     input  logic                   intrpt_i,         // interrupt
+    
     output logic [`ADDR_WIDTH-1:0] pc_to_imem_addr,
 
     // Control Signals from Control Unit
@@ -43,7 +45,6 @@ module datapath (
     input  logic [`REG_ADDR_WIDTH-1:0] rf_src2_addr_from_cu,
     input  logic [1:0]  rf_write_data_sel_from_cu,
     input  logic        flags_write_en_from_cu,
-//    input  logic        reti_flags_sel_from_cu,
     input  logic [`DATA_WIDTH-1:0] imm_val_from_cu, // Assembled immediate from CU
     input  logic [3:0]  alu_op_from_cu,
     input  logic        alu_src_a_sel_from_cu,
@@ -51,7 +52,6 @@ module datapath (
     input  logic        dmem_write_en_from_cu,
     input  logic [1:0]  dmem_addr_sel_from_cu,
     input  logic [1:0]  dmem_data_sel_from_cu,
-    input  logic        imem_addr_sel_from_cu,
     input  logic        sp_op_inc_from_cu,
     input  logic        sp_op_dec_from_cu,
     input  logic        save_pc_from_cu,
@@ -68,7 +68,7 @@ module datapath (
     
     // Debug
         // Debug
-    output logic [19:0] dbg_bus_dp,
+    output logic [21:0] dbg_bus_dp,
 
     // Outputs to Control Unit (Flags)
     output logic                   ZF_to_cu, SF_to_cu, CF_to_cu, OF_to_cu,
@@ -86,105 +86,73 @@ logic alu_zf, alu_sf, alu_cf, alu_of;
 // PC
 logic [`ADDR_WIDTH-1:0] pc_reg, pc_next_calculated;
 logic [`ADDR_WIDTH-1:0] pc_int_reti;
-logic [ 3:0]            flags_sav;
+logic [ 5:0]            flags_sav;
 // Register File
 logic [`DATA_WIDTH-1:0] rf_rdata1, rf_rdata2;
 logic [`DATA_WIDTH-1:0] rf_wdata_final;
 logic [`NUM_GP_REGS-1:0] [`DATA_WIDTH-1:0] register_file;
 logic [`ADDR_WIDTH-1:0] sp_reg;
 
-logic [`ADDR_WIDTH-1:0] imem_addr_gen;
-logic [15:0]            grant_int_addr;
-logic [ 3:0]            irq_vec_sav;
-logic                   imem_addr_sel_from_cu_r;
-logic                   imem_addr_sel_fedge;
-logic                   imem_addr_sel_redge;
+logic                   restore_flags;
+logic                   dmem_addr_rdy;
+
+
+    // =================================
+    // Interrupt FSM
+    // =================================
+    logic [`ADDR_WIDTH-1:0] dmem_addr_fsm;
+    // State machine for TX FIFO control
+    typedef enum logic [1:0] {
+        IDLE,
+        WT_CU_FSM,
+        MEM_DLY,
+        CLEANUP
+    } dp_state_t;
+    
+    dp_state_t dp_state;
+    
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            dp_state <= IDLE;
+            dmem_addr_fsm <= '0;
+        end else begin
+            //
+            case (dp_state)
+                IDLE: begin
+                    if (intrpt_i) begin
+                        // setup dmem address using IVT_BASE + (irq_num << 1)
+                        dmem_addr_fsm   <= `IVT_BASE_ADDR + (grant_vec_i << 1);  // IVT_BASE + (irq_num << 1)
+                        dp_state <= WT_CU_FSM;
+                    end
+                end
+                
+                // Wait for control_unit FSM to select IVT address.
+                // The CU FSM must wait to complete the instruction before the interrupt.
+                WT_CU_FSM: begin
+                    if (dmem_addr_rdy) begin
+                       dp_state <= MEM_DLY;
+                    end
+                end
+                
+                // 1 clk delay for memory output
+                MEM_DLY: begin
+                    dp_state <= CLEANUP;
+                end
+                               
+                CLEANUP: begin
+                    dmem_addr_fsm   <= `IVT_BASE_ADDR;
+                    dp_state        <= IDLE;          // wait for next interrupt
+                end
+            endcase
+        end
+    end
+    
+    assign dmem_addr_rdy = dmem_addr_sel_from_cu == `DMEM_ADDR_SRC_IVT; // 2'b11
 
     //================================================================
     // Program Counter (PC) and Flags
     //================================================================
-    // Insruction memory address mux to read from IVT for interrupt entry
-    always_comb begin
-        if (imem_addr_sel_from_cu) begin
-            pc_to_imem_addr = imem_addr_gen;  // IVT_BASE + (irq_num << 1) + 1
-        end
-        else begin
-            pc_to_imem_addr = pc_reg;
-        end
-    end
-    
-    // imem_addr generator for interrupts
-    // IVT_BASE + (irq_num << 1) + 1
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin; 
-            imem_addr_gen   <= `IVT_BASE_ADDR;  // IVT_BASE
-        end
-        // get interrupt address
-        else if (imem_addr_sel_redge) begin
-            imem_addr_gen   <= `IVT_BASE_ADDR + irq_vec_sav;  // IVT_BASE + (irq_num << 1)
-        end         
-        else if (imem_addr_sel_from_cu) begin
-            imem_addr_gen   <= imem_addr_gen + 1;   // IVT_BASE + (irq_num << 1) + 1
-        end
-        // set for next interrput
-        else if (imem_addr_sel_fedge) begin
-            imem_addr_gen   <= `IVT_BASE_ADDR;  // IVT_BASE + (irq_num << 1)
-        end   
-    end
-    
-    // Capture interrupt number in service
-    // grant_vec_i from pic.sv
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin; 
-            irq_vec_sav   <= 3'h0;  // interrupt number
-        end
-        // save the interrupt number when irq is granted
-        else if (intrpt_i) begin
-            irq_vec_sav   <=  grant_vec_i;  // IVT_BASE + (irq_num << 1)
-        end
-        // get ready for next interrupt
-        else if (imem_addr_sel_fedge) begin
-            irq_vec_sav   <=  '0;  
-        end         
-    end
-    
-    // one clock delay
-    logic [2:0] imem_addr_sel_shft;
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            imem_addr_sel_from_cu_r <= 1'b0;
-            imem_addr_sel_shft      <= 3'b000;
-            imem_addr_sel_fedge     <= 1'b0; 
-        end
-        else begin
-            imem_addr_sel_from_cu_r <= imem_addr_sel_from_cu;
-            imem_addr_sel_shft <= { imem_addr_sel_shft[1:0], imem_addr_sel_from_cu };
-            if (imem_addr_sel_shft[1:0] == 2'b01 ) begin
-               imem_addr_sel_fedge  <= 1'b1;
-            end 
-            else begin
-               imem_addr_sel_fedge  <= 1'b0;
-            end 
-        end 
-    end
-    assign imem_addr_sel_redge = (imem_addr_sel_shft[1:0] == 2'b10);
-    
-    
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            grant_int_addr      <= 16'h0; 
-        end
-        else if (imem_addr_sel_from_cu_r) begin
-            if (imem_addr_gen[0]) begin
-                grant_int_addr[7:0]      <= imem_rdata_i; 
-            end
-            else begin
-                grant_int_addr[15:8]     <= imem_rdata_i; 
-            end 
-        end 
-    end
-    
-//    assign pc_to_imem_addr = pc_reg;
+    assign pc_to_imem_addr = pc_reg;
 
     // save_pc_from_cu
     always_ff @(posedge clk or negedge rst_n) begin
@@ -210,29 +178,44 @@ logic                   imem_addr_sel_redge;
         case (pc_src_sel_from_cu)
             `PC_SRC_PC_PLUS_1:  pc_next_calculated = pc_reg + 1;           //000
             `PC_SRC_IMM:        pc_next_calculated = imm_val_from_cu;      //001
-            `PC_SRC_MEM:        pc_next_calculated = dmem_rdata_in;        //010
+            `PC_SRC_MEM:        pc_next_calculated = dmem_rdata_in;        //010, for RET and RETI
             `PC_SRC_PC_CURRENT: pc_next_calculated = pc_reg;               //011
             `PC_SRC_ALU:        pc_next_calculated = alu_result_internal;  //100
             // Entry address for Interrupt from IVT in instruction memory
-            `PC_SRC_IVT:        pc_next_calculated = grant_int_addr;       //101
+// -------------- The BIG change -----------------------------
+//            `PC_SRC_IVT:        pc_next_calculated = dmem_rdata_in;       //101 for dmem_data
             // RETI after interrupt; restore PC
-            `PC_SRC_RESTORE:    pc_next_calculated = pc_int_reti;          //110
+            `PC_SRC_RESTORE:    pc_next_calculated = pc_int_reti;          //101
             default:            pc_next_calculated = pc_reg;
         endcase
     end
 
-    // --- Flags Logic ---
-    // save  flags during Interrupt process
+    // --- Flags Logic ---   
+    // save flags at the start of an Interrupt during the
+    // Fetch Opcode state
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            flags_sav  <= 4'h0;
+            flags_sav  <= '0;
         end
+        // save_pc_from_cu asserted when interrupt condition met
         else if (save_pc_from_cu) begin
-            flags_sav  <= {ZF_to_cu, SF_to_cu, CF_to_cu, OF_to_cu};
+            flags_sav  <= {reg_is_neg_to_cu, reg_is_zero_to_cu, ZF_to_cu, SF_to_cu, CF_to_cu, OF_to_cu};
         end
     end
     
+ 
+    // signal used to restore flags after returning from interrupt (ISR)
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            restore_flags <= 1'b0;
+        end
+        // pc_src_sel_from_cu == `PC_SRC_RESTORE during RETI instruction in CU
+        else begin
+            restore_flags <= pc_src_sel_from_cu == `PC_SRC_RESTORE;
+        end
+    end
     
+    // Save Flags
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             ZF_to_cu <= 1'b0;
@@ -240,40 +223,51 @@ logic                   imem_addr_sel_redge;
             CF_to_cu <= 1'b0;
             OF_to_cu <= 1'b0;
         end
+        // save flags during an ALU operation and use them
+        // for the next JXX instruction
         else if (flags_write_en_from_cu) begin 
-            // restore flags save during interrupt entry
-//            if (reti_flags_sel_from_cu) begin
-            if (pc_src_sel_from_cu == `PC_SRC_RESTORE) begin
-                ZF_to_cu <= flags_sav[3];
-                SF_to_cu <= flags_sav[2];
-                CF_to_cu <= flags_sav[1];
-                OF_to_cu <= flags_sav[0];
-            end
-            // normal flags saved
-            else begin
-                ZF_to_cu <= alu_zf;
-                SF_to_cu <= alu_sf;
-                CF_to_cu <= alu_cf;
-                OF_to_cu <= alu_of;            
-            end
+            ZF_to_cu <= alu_zf;
+            SF_to_cu <= alu_sf;
+            CF_to_cu <= alu_cf;
+            OF_to_cu <= alu_of;
         end
+        // Restore flags saved during interrupt entry and use flags
+        // with the next instruction after RETI.
+        // Flags restored during RETI instruction
+        else if (restore_flags) begin 
+            ZF_to_cu <= flags_sav[3];
+            SF_to_cu <= flags_sav[2];
+            CF_to_cu <= flags_sav[1];
+            OF_to_cu <= flags_sav[0];
+       end
     end
- 
-
+    
+    
+    // Register-based jump condition flags to CU
+    // These two flags are for the current instruction (OP_JMPZ or OP_JMPN)
+    // so we don't have to save the flags for future use, possibly after an
+    // interrupt.
+    assign reg_is_zero_to_cu = (rf_rdata1 == 16'b0);
+    assign reg_is_neg_to_cu  = rf_rdata1[15];
+    
+    // Register-based jump condition flags to CU
+    // OP_JMPZ and OP_JMPN
 //    always_ff @(posedge clk or negedge rst_n) begin
 //        if (!rst_n) begin
-//            ZF_to_cu <= 1'b0;
-//            SF_to_cu <= 1'b0;
-//            CF_to_cu <= 1'b0;
-//            OF_to_cu <= 1'b0;
+//            reg_is_neg_to_cu  <= 1'b0;
+//		    reg_is_zero_to_cu <= 1'b0;
 //        end
-//        else if (flags_write_en_from_cu) begin 
-//            ZF_to_cu <= alu_zf;
-//            SF_to_cu <= alu_sf;
-//            CF_to_cu <= alu_cf;
-//            OF_to_cu <= alu_of;
+//        // at the end of an interrupt, restore zero and neg flags
+//        else if (restore_flags) begin
+//            reg_is_neg_to_cu  <= flags_sav[5];
+//		    reg_is_zero_to_cu <= flags_sav[4];        
 //        end
+//        else begin
+//            reg_is_zero_to_cu <= (rf_rdata1 == 16'b0);
+//            reg_is_neg_to_cu  <= rf_rdata1[15];        
+//        end 
 //    end
+ 
 
     //================================================================
     // Register File (R0-R7) and Stack Pointer (SP)
@@ -361,7 +355,7 @@ logic                   imem_addr_sel_redge;
             `DMEM_ADDR_SRC_SP:  dmem_addr_out = sp_reg;            // 01
             `DMEM_ADDR_SRC_ALU: dmem_addr_out = alu_result_internal; // For LOADI/STORI
             // IVT entry address
-            `DMEM_ADDR_SRC_IVT: dmem_addr_out = `IVT_BASE_ADDR;    // IVT base + irq_num << 1         
+            `DMEM_ADDR_SRC_IVT: dmem_addr_out = dmem_addr_fsm;    // IVT base + irq_num << 1         
             default:            dmem_addr_out = 16'hDEAD;
         endcase
     end
@@ -375,24 +369,13 @@ logic                   imem_addr_sel_redge;
             default:             dmem_wdata_out = rf_rdata1;
         endcase
     end
-	
-	// Gemini found the error below. A Mux is already used to assign dmem_wdata_out.
-    // assign dmem_wdata_out = rf_rdata1;
 
     // GPIO Output
     assign gpio_out_data_bus = rf_rdata1;
-
-    // Register-based jump condition flags to CU
-    assign reg_is_zero_to_cu = (rf_rdata1 == 16'b0);
-    assign reg_is_neg_to_cu  = rf_rdata1[15];
     
     //================================================================
     // Debug
     //================================================================
-    
-// ZF_to_cu, SF_to_cu, CF_to_cu, OF_to_cu,
-// reg_is_zero_to_cu,
-// reg_is_neg_to_cu
     
     // assign debug bus; 14 signals [13:0]
     always_ff @(posedge clk or negedge rst_n) begin
@@ -400,7 +383,7 @@ logic                   imem_addr_sel_redge;
             dbg_bus_dp <= '0;
         end
         else begin 
-            dbg_bus_dp <= { reg_is_neg_to_cu, reg_is_zero_to_cu, ZF_to_cu, SF_to_cu, CF_to_cu, OF_to_cu, pc_reg[13:0] };
+            dbg_bus_dp <= { save_pc_from_cu, restore_flags, reg_is_neg_to_cu, reg_is_zero_to_cu, ZF_to_cu, SF_to_cu, CF_to_cu, OF_to_cu, pc_reg[13:0] };
        end
     end
 
