@@ -17,6 +17,7 @@
 // Dependencies: None
 // 
 // Revision:
+// Revision 1.3 - Multiple interrupts (Timer & UART) work
 // Revision 1.2 - Added all byte-access instruction opcodes: LOADB, STORB, LOADIB, STORIB, LOADBFR, STORBFR
 // Revision 1.1 - Added back missing DATA_MEMORY_WORDS macro definition.
 // Revision 1.0 - Synced with Python toolchain and added control constants.
@@ -142,11 +143,11 @@
 // PC Source Selection (for pc_src_sel_out)
 `define PC_SRC_PC_PLUS_1    3'b000 // PC + 1 (for byte-wise fetch)
 `define PC_SRC_IMM          3'b001 // Immediate value from instruction (for JMP, CALL)
-`define PC_SRC_MEM          3'b010 // Value from data memory bus (for RET)
+`define PC_SRC_MEM          3'b010 // Value from data memory bus (for RET and RETI)
 `define PC_SRC_PC_CURRENT   3'b011 // PC = PC (for HALT)
 `define PC_SRC_ALU          3'b100 // Value from ALU result (for calculated jumps - future)
-`define PC_SRC_IVT          3'b101 // Interrupt vector address
-`define PC_SRC_RESTORE      3'b110 // Saved PC when entering Interrupt - restore value
+//`define PC_SRC_IVT          3'b101 // Interrupt vector address
+`define PC_SRC_RESTORE      3'b101 // Saved PC when entering Interrupt - restore value
 
 // ALU Operand A Source Selection (for alu_src_a_sel_out)
 `define ALU_A_SRC_REG       1'b0
@@ -174,8 +175,8 @@
 `define DMEM_DATA_SRC_PC    2'b10 // From PC
 
 // Instruction Memory Address Source (for imem_addr_sel_out)
-`define IMEM_ADDR_SRC_PC    1'b0  // Direct address from PC
-`define IMEM_ADDR_SRC_IVT   1'b1  // IVT_Base + irq_num<<1
+//`define IMEM_ADDR_SRC_PC    1'b0  // Direct address from PC
+//`define IMEM_ADDR_SRC_IVT   1'b1  // IVT_Base + irq_num<<1
 
 //================================================================
 // Interrut Vector 
