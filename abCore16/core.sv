@@ -14,6 +14,7 @@
 // for its main instruction, data, and GPIO buses.
 //
 // Revision:
+// Revision 1.3 - Multiple interrupts (Timer & UART) work
 // Revision 1.2 - Refactored to use imem_bus_if, dmem_bus_if, and gpio_bus_if.
 // Revision 1.1 - Corrected connections for the reverted DP-centric architecture.
 //
@@ -37,13 +38,13 @@ module core (
 //	output logic      mmio_rden_o,          // memory read Rd = Mem[Rs_addr]
     // Debug
     output logic [20:0] dbg_bus_cu,      // 21 signals
-    output logic [13:0] dbg_bus_dp,      // 14 signals 
+    output logic [21:0] dbg_bus_dp,      // 22 signals 
     // CPU halt flag
     output logic       halted_o
 );
 
 //logic [20:0] dbg_bus_cu;      // 21 signals
-//logic [13:0] dbg_bus_dp;      // 14 signals 
+//logic [21:0] dbg_bus_dp;      // 22 signals 
 
     //================================================================
     // Internal Wires for CPU buses
@@ -103,7 +104,6 @@ module core (
     logic [`REG_ADDR_WIDTH-1:0] rf_src2_addr_to_dp;
     logic [1:0] rf_write_data_sel_to_dp;
     logic flags_write_en_to_dp;
-//    logic reti_flags_sel_to_dp;
     logic [`DATA_WIDTH-1:0] imm_val_to_dp;
     logic [3:0] alu_op_to_dp;
     logic       alu_src_a_sel_to_dp;
@@ -111,7 +111,6 @@ module core (
     logic dmem_write_en_to_dp;
     logic [1:0] dmem_addr_sel_to_dp;
     logic [1:0] dmem_data_sel_to_dp;
-    logic       imem_addr_sel_to_dp;
     logic sp_op_inc_to_dp;
     logic sp_op_dec_to_dp;
     
@@ -129,7 +128,6 @@ module core (
     datapath dp_unit (
         .clk(clk),
         .rst_n(rst_n),
-        .imem_rdata_i(imem_rdata_i),   // instruction data for interrupts
         .grant_vec_i(pic_bus.grant_vec), // granted interrupt number
         .intrpt_i(pic_bus.intrpt),       // interrupt
         .pc_to_imem_addr(imem_addr_o),
@@ -143,7 +141,6 @@ module core (
         .rf_src2_addr_from_cu(rf_src2_addr_to_dp),
         .rf_write_data_sel_from_cu(rf_write_data_sel_to_dp),
         .flags_write_en_from_cu(flags_write_en_to_dp),
-//        .reti_flags_sel_from_cu(reti_flags_sel_to_dp),
         .imm_val_from_cu(imm_val_to_dp),
         .alu_op_from_cu(alu_op_to_dp),
         .alu_src_a_sel_from_cu(alu_src_a_sel_to_dp),
@@ -151,7 +148,6 @@ module core (
         .dmem_write_en_from_cu(dmem_write_en_to_dp),
         .dmem_addr_sel_from_cu(dmem_addr_sel_to_dp),
         .dmem_data_sel_from_cu(dmem_data_sel_to_dp),
-        .imem_addr_sel_from_cu(imem_addr_sel_to_dp),
         .sp_op_inc_from_cu(sp_op_inc_to_dp),
         .sp_op_dec_from_cu(sp_op_dec_to_dp),
         .save_pc_from_cu(save_pc_o),
@@ -203,7 +199,6 @@ module core (
         .rf_src2_addr_out(rf_src2_addr_to_dp),
         .rf_write_data_sel_out(rf_write_data_sel_to_dp),
         .flags_write_en_out(flags_write_en_to_dp),
-//        .reti_flags_sel_out(reti_flags_sel_to_dp),
         .imm_val_to_dp_out(imm_val_to_dp),
         .alu_op_out(alu_op_to_dp),
         .alu_src_a_sel_out(alu_src_a_sel_to_dp),
@@ -214,7 +209,6 @@ module core (
         .dmem_byt_wrflg_out(dmem_byt_wrflg_o),
         .dmem_addr_sel_out(dmem_addr_sel_to_dp),
         .dmem_data_sel_out(dmem_data_sel_to_dp),
-        .imem_addr_sel_out(imem_addr_sel_to_dp),
         .sp_op_inc_out(sp_op_inc_to_dp),
         .sp_op_dec_out(sp_op_dec_to_dp),
         .enable_int_out(enable_int_o),
