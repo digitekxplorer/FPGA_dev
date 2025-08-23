@@ -15,6 +15,7 @@
 // Memory-mapped functionality has been extracted into a separate core_regs module.
 //
 // Revision:
+// Revision 1.6 - Multiple interrupts (Timer & UART) work
 // Revision 1.5 - Fixed multiple driver issues by using continuous assignments
 //                for read-only registers that directly reflect hardware state.
 // Revision 1.4 - Refactored to use timer_if and uart_if interfaces.
@@ -122,8 +123,8 @@ assign gpio_in_i = gpio_out_o;
 // Debug
 logic [60:0] dbg_bus_pic;     // 61 signals
 logic [20:0] dbg_bus_cu;      // 21 signals
-logic [19:0] dbg_bus_dp;      // 14 signals 
-                              // 96
+logic [21:0] dbg_bus_dp;      // 22 signals 
+                              // 104
 
     
 //================================================================
@@ -211,14 +212,10 @@ core core01 (
     .enable_int_o (enable_int),  
     // debug
     .dbg_bus_cu   (dbg_bus_cu),      // 21 signals
-    .dbg_bus_dp   (dbg_bus_dp),      // 14 signals         
+    .dbg_bus_dp   (dbg_bus_dp),      // 22 signals         
     .halted_o     (halted_o)
 );
 
-
-    // debug
-//    .dbg_bus_cu   (dbg_bus_cu),      // 21 signals
-//    .dbg_bus_dp   (dbg_bus_dp),      // 14 signals 
 
 // --- Memory-mapped IO Registers ---
 // Use CPU data bus to access memory-mapped registers.
@@ -284,35 +281,48 @@ logic int1_timeout;
 logic int2_timeout;
 logic int1_uartrx;
 assign int0_timeout = timer_bus.timeout;
-assign int1_uartrx = uart_bus.rx_fifo_avail;
+//assign int1_uartrx = uart_bus.rx_fifo_avail;
 //assign pic_bus.peripheral.irq = {14'h0, int1_uartrx, int0_timeout};  // Interrupt request lines from peripherals
 //assign pic_bus.peripheral.irq = {13'h0, int2_timeout, int1_timeout, int0_timeout};  // Interrupt request lines from peripherals
 // assign pic_bus.peripheral.irq = {15'h0, int0_timeout};   // Cannot resolve
-assign device_irqs = {15'h0, int0_timeout};
+assign device_irqs = {14'h0, int1_uartrx, int0_timeout};
 pic pic01 (
     .clk             (clk),
     .rst_n           (rst_n),
     .pic_cpu_bus     (pic_cpu_bus.pic),      // CPU interface
     .pic_mmio_bus    (pic_mmio_bus.pic),     // MMIO interface  
     .enable_int_i    (enable_int),           
-    .irq_i           ({15'h0, int0_timeout}), // Direct connection
+    .irq_i           (device_irqs), // Direct connection
     .dbg_bus_pic     (dbg_bus_pic)     
 );
 
-
-// Int 1 Shifter
-logic [15:0] int01_shft;
+// UART RX int signal rising edge
+logic [1:0] int01_shft;
 always_ff@(posedge clk) begin
    if(!rst_n) begin
-       int01_shft  <= 16'h0;          
+       int01_shft  <= '0;
+       int1_uartrx <= 1'b0;         
    end
    else begin 
-       int01_shft  <= { int01_shft[14:0], int0_timeout };
+       int01_shft  <= { int01_shft[0], uart_bus.rx_fifo_avail };
+       int1_uartrx <= int01_shft == 2'b01;
+   end
+end
+
+
+// Int 1 Shifter
+logic [15:0] int00_shft;
+always_ff@(posedge clk) begin
+   if(!rst_n) begin
+       int00_shft  <= 16'h0;          
+   end
+   else begin 
+       int00_shft  <= { int00_shft[14:0], int0_timeout };
    end
 end
 // create a delayed versions of int0_timeout
-assign int1_timeout = int01_shft[15];  // Int#1
-assign int2_timeout = int01_shft[5];  // Int#2
+assign int1_timeout = int00_shft[15];  // Int#1
+assign int2_timeout = int00_shft[5];  // Int#2
 
 //================================================================
 // Conditional Memory Instantiation
@@ -687,9 +697,10 @@ end
 // Debug
 //logic [60:0] dbg_bus_pic;     // 61 signals
 //logic [20:0] dbg_bus_cu;      // 21 signals
-//logic [19:0] dbg_bus_dp;      // 14 signals 
+//logic [21:0] dbg_bus_dp;      // 22 signals 
+//                                 104 signals
 //--- ILA_0  ---
-logic [105:0] probe0;
+logic [107:0] probe0;
 // The ILA probe uses the dmem_bus interface signals
 //assign probe0[31:0] = { dmem_bus.addr[8:0], uart_bus.rx_data, uart_bus.tx_data, uart_tx_o, uart_rx_sync, 
 //                        uart_bus.tx_start, 1'b0, uart_bus.rx_fifo_avail,
