@@ -26,6 +26,9 @@ module cpu_tb;
     localparam CLK12_PERIOD     = 83.3;  // 12 MHz clock
     localparam MAX_SIM_CYCLES = 122000;
     localparam TEST_RESULT    = 30;
+    
+    localparam LOOP_CNT = 7;
+    localparam TX_DATA  = 'h59;
 
     // DUT External Connections
     logic clk_12MHz;
@@ -52,6 +55,8 @@ module cpu_tb;
     int   cycle_count = 0;
     logic test_passed = 1'b0;
     logic [`DATA_WIDTH-1:0] captured_gpio_out = 'x;
+    
+ //   logic tb_mmio_rden;
    
 
     //================================================================
@@ -108,8 +113,8 @@ module cpu_tb;
         tb_uart_bus.tx_data  <= 'h59;
         tb_uart_bus.tx_start <= 1'b0;
         dut_uart_rx_access <= 1'b0;     // currently not used
-//        dut_mmio_rden        <= 1'b0;     // currently not used
         tb_gpio_bus.mmio_rden <= 1'b0;     // currently not used
+//        tb_mmio_rden <= 1'b0;     // currently not used
         tx_trigger_btn_o      = 1'b0;
         repeat(5) @(posedge clk_12MHz);
         tb_uart_rst = 1'b0;
@@ -124,18 +129,24 @@ module cpu_tb;
         
         repeat(100) @(posedge clk_12MHz);   // wait for abCore16 setup  
         
-        tx_data_send('h59);
-        repeat(2) @(posedge clk_12MHz);
-        tx_data_send('h60);
-        repeat(2) @(posedge clk_12MHz);
-        tx_data_send('h61);
+        for (integer i=0; i<LOOP_CNT; i++) begin
+            // TX_DATA
+            tx_data_send(TX_DATA + i);
+            repeat(2) @(posedge clk_12MHz);
+        end 
         
-        repeat(2) @(posedge clk_12MHz);
-        tx_data_send('h62);
-        repeat(2) @(posedge clk_12MHz);
-        tx_data_send('h63);
-        repeat(2) @(posedge clk_12MHz);
-        tx_data_send('h64);
+//        tx_data_send('h59);
+//        repeat(2) @(posedge clk_12MHz);
+//        tx_data_send('h60);
+//        repeat(2) @(posedge clk_12MHz);
+//        tx_data_send('h61);
+//        repeat(2) @(posedge clk_12MHz);
+//        tx_data_send('h62);
+//        repeat(2) @(posedge clk_12MHz);
+//        tx_data_send('h63);
+//        repeat(2) @(posedge clk_12MHz);
+//        tx_data_send('h64);
+        
         // Start the transmission by asserting the start signal inside the interface
 //        tb_uart_bus.tx_start <= 1'b1;      // send one single pulse
 //        @(posedge clk_12MHz);
@@ -158,7 +169,7 @@ module cpu_tb;
         .uart_bus          (tb_uart_bus.peripheral), // Connect the TB interface
         .i_tx_start_manual ('0), // Manual button not used by this instance
         .i_uart_rx_access  (dut_uart_rx_access),
-//        .i_mmio_rden       (dut_mmio_rden),
+//        .i_mmio_rden       (tb_mmio_rden),
         .gpio_bus          (tb_gpio_bus.peripheral),    // gpio and mmio
         // Connect the physical pins to the wires going to the DUT
         .o_uart_tx         (dut_rx_wire),  // TB UART TX -> DUT RX
