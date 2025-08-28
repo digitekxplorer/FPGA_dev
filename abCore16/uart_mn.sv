@@ -28,6 +28,7 @@ module uart_mn #(
     
     input  logic             i_tx_start_manual,
     input  logic             i_uart_rx_access,     // Uart RX addr selected for access, from mmio_regs.sv
+//    input  logic             i_mmio_rden,
     gpio_bus_if.peripheral   gpio_bus,             // gpio and mmio interface, from control_unit.sv
     output logic             o_uart_tx,
     input  logic             i_uart_rx
@@ -246,6 +247,7 @@ module uart_mn #(
                     // This means cpu read from the RX Uart Fifo
                     // Use gpio_bus interface to access mmio_rden; memory read Rd = Mem[Rs_addr]
                     if (i_uart_rx_access && gpio_bus.mmio_rden) begin
+//                    if (i_uart_rx_access && i_mmio_rden) begin
                         rx_state <= RX_READ_FIFO;
                     end
                 end
