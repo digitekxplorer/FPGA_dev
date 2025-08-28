@@ -15,6 +15,7 @@
 // Memory-mapped functionality has been extracted into a separate core_regs module.
 //
 // Revision:
+// Revision 1.7 - Moved CPU memory and core to cpu_system.sv
 // Revision 1.6 - Multiple interrupts (Timer & UART) work
 // Revision 1.5 - Fixed multiple driver issues by using continuous assignments
 //                for read-only registers that directly reflect hardware state.
@@ -42,31 +43,6 @@ import mmio_reg_pkg::*;
 // For Synthesis, comment out both defines
 //`define MEMORYMODELSIM    // use hex file
 //`define SIMSPEEDUPCLK     // use Testbench 12MHz clock
-
-// --- FOR SIMULATION: Use a fast, behavioral memory model ---
-// Remember: Must add new coe and hex files to abCore16 project as Coefficient 
-// and Memory Files!!
-// .ab Programs
-// `define IMEM_HEX_FILE "myProg_add.hex" // << CHANGE THIS TO YOUR TEST PROGRAM
-//`define IMEM_HEX_FILE "myProg_generic.hex" // Comprehensive Test (.ab)
-//`define IMEM_HEX_FILE "myProg_loadi.hex" // Comprehensive Test (.ab)
-// SAL Programs
-//`define IMEM_HEX_FILE "test_func.hex"  // Test STORFR, LOADFR
-// SSL Programs: C-like with main()
-//`define IMEM_HEX_FILE "test_program_short.hex"  // several C-Like features
-//`define IMEM_HEX_FILE "test_arrays.hex"  // arrays
-//`define IMEM_HEX_FILE "test_forLp.hex"  // for Loop
-//`define IMEM_HEX_FILE "test_mmio.hex"  // memory-mapped I/O
-//`define IMEM_HEX_FILE "test_pointers.hex"  // C-like pointers
-//`define IMEM_HEX_FILE "test_postfix.hex"  // p++ and p--
-//`define IMEM_HEX_FILE "test_new_features.hex"  // p++ and p--, else if, switch
-//`define IMEM_HEX_FILE "test_blink.hex"  // blink LED using SW counters
-//`define IMEM_HEX_FILE "test_timer.hex"  // blink LED using HW timer
-//`define IMEM_HEX_FILE "test_char.hex"  // test char data type
-//`define IMEM_HEX_FILE "test_loadb_storb.hex"  // Test byte instructions
-//`define IMEM_HEX_FILE "test_loadbfr_storbfr.hex"  // Test byte instructions, frame relative
-`define IMEM_HEX_FILE "test_uart.hex"  // UART at 115,200 baud
-//`define IMEM_HEX_FILE "test_interrupt.hex"   // Interrupt testing
 
 module cpu_tl (
     input  logic clk_12MHz,
@@ -96,12 +72,10 @@ localparam UART_DATA_BITS = 8;
 localparam BAUD_RATE = 115200;
 
 // -- Internal signals --
-logic [`DATA_WIDTH-1:0] dmem_bram_rdata_i; // Renamed to distinguish from interface rdata
 
 logic [15:0] mmio_rd_data;
 logic        mmio_rd_valid;
 logic        uart_rx_access;
-logic        memorymap_range;
 logic        tx_start_btn;
 logic        eoi_update;
 logic        enable_int;
@@ -111,21 +85,23 @@ logic [15:0] led_ctrl;
 logic clk;
 logic rst_n;
 logic locked;
-
-logic                   dmem_wren_fsm;
-logic [`ADDR_WIDTH-2:0] dmem_word_addr_fsm;
-logic [15:0]            dmem_word_data_fsm;
-
-// To reduce pin count for development board assign gpio_in_i here.
-logic [`DATA_WIDTH-1:0] gpio_in_i;
-assign gpio_in_i = gpio_out_o;
+logic memorymap_range;
 
 // Debug
 logic [60:0] dbg_bus_pic;     // 61 signals
 logic [20:0] dbg_bus_cu;      // 21 signals
 logic [21:0] dbg_bus_dp;      // 22 signals 
                               // 104
+// --- Programmable Interrupt Controller (PIC) Module Instantiation ---
+logic [15:0] device_irqs;       // Interrupt request lines from peripherals
+logic int0_timeout;
+logic int1_timeout;
+logic int2_timeout;
+logic int1_uartrx;
 
+// To reduce pin count for development board assign gpio_in_i here.
+logic [`DATA_WIDTH-1:0] gpio_in_i;
+assign gpio_in_i = gpio_out_o;
     
 //================================================================
 // Conditional Clock Module Instantiation
@@ -161,15 +137,13 @@ assign rst_n = locked;
 // Pass the system clock and reset to them.
 // Instantiate the interfaces that will bundle signals between modules.
 // Pass the system clock and reset to them.
-timer_if timer_bus ( .clk(clk), .rst_n(rst_n) );
+// Instances of Interfaces
+timer_if timer_bus ( .clk(clk), .rst_n(rst_n) );         // Instance of Interface
 uart_if  uart_bus  ( .clk(clk), .rst_n(rst_n) );
-
-// NEW: Simplified PIC interfaces
+// --- PIC interfaces ---
 pic_if      pic_cpu_bus  ( .clk(clk), .rst_n(rst_n) );   // PIC to CPU signals
 pic_mmio_if pic_mmio_bus ( .clk(clk), .rst_n(rst_n) );   // PIC to MMIO signals
-
 // --- CPU Bus Interfaces ---
-imem_bus_if imem_bus ( .clk(clk), .rst_n(rst_n) );
 dmem_bus_if dmem_bus ( .clk(clk), .rst_n(rst_n) );
 gpio_bus_if gpio_bus ( .clk(clk), .rst_n(rst_n) );
 
@@ -202,20 +176,24 @@ assign gpio_out_we_o = gpio_bus.wren;
 // 1) instruction memory  (access instructions from memory)
 // 2) data memory (access both data and memory-mapped IO)
 // 3) GPIO bus (GPIO bus used for print instruction)
-core core01 (
-    .clk          (clk),
-    .rst_n        (rst_n),
-    .imem_bus     (imem_bus.master),     
-    .dmem_bus     (dmem_bus.master),     
-    .gpio_bus     (gpio_bus.cpu),        
-    .pic_bus      (pic_cpu_bus.cpu),     // Only CPU-relevant PIC signals
-    .enable_int_o (enable_int),  
-    // debug
-    .dbg_bus_cu   (dbg_bus_cu),      // 21 signals
-    .dbg_bus_dp   (dbg_bus_dp),      // 22 signals         
-    .halted_o     (halted_o)
+cpu_system cpu_system01 (
+    .clk        (clk),
+    .rst_n      (rst_n),
+    // External interfaces to peripherals/system
+    .dmem_bus   (dmem_bus.mmio_writer),          // For MMIO access
+    .gpio_bus   (gpio_bus.gpio_writer),          // GPIO interface
+    // PIC interfaces
+    .pic_cpu_bus  (pic_cpu_bus.cpu),         // CPU-PIC interface  
+    // Direct connections
+    .mmio_rd_data_i    (mmio_rd_data),
+    .enable_int_o      (enable_int),
+    .memorymap_range_o (memorymap_range),
+    // Debug outputs
+    .dbg_bus_cu     (dbg_bus_cu),  // output logic [20:0] 
+    .dbg_bus_dp     (dbg_bus_dp),  // output logic [21:0] 
+    // Status outputs
+    .halted_o       (halted_o)
 );
-
 
 // --- Memory-mapped IO Registers ---
 // Use CPU data bus to access memory-mapped registers.
@@ -271,31 +249,9 @@ always_ff @(posedge clk or negedge rst_n) begin
     end
 end
 
-
-// --- Programmable Interrupt Controller (PIC) Module Instantiation ---
-logic [15:0] device_irqs;       // Interrupt request lines from peripherals
-
 // Assign interrupts to PIC
-logic int0_timeout;
-logic int1_timeout;
-logic int2_timeout;
-logic int1_uartrx;
 assign int0_timeout = timer_bus.timeout;
 //assign int1_uartrx = uart_bus.rx_fifo_avail;
-//assign pic_bus.peripheral.irq = {14'h0, int1_uartrx, int0_timeout};  // Interrupt request lines from peripherals
-//assign pic_bus.peripheral.irq = {13'h0, int2_timeout, int1_timeout, int0_timeout};  // Interrupt request lines from peripherals
-// assign pic_bus.peripheral.irq = {15'h0, int0_timeout};   // Cannot resolve
-assign device_irqs = {14'h0, int1_uartrx, int0_timeout};
-pic pic01 (
-    .clk             (clk),
-    .rst_n           (rst_n),
-    .pic_cpu_bus     (pic_cpu_bus.pic),      // CPU interface
-    .pic_mmio_bus    (pic_mmio_bus.pic),     // MMIO interface  
-    .enable_int_i    (enable_int),           
-    .irq_i           (device_irqs), // Direct connection
-    .dbg_bus_pic     (dbg_bus_pic)     
-);
-
 // UART RX int signal rising edge
 logic [1:0] int01_shft;
 always_ff@(posedge clk) begin
@@ -308,6 +264,19 @@ always_ff@(posedge clk) begin
        int1_uartrx <= int01_shft == 2'b01;
    end
 end
+
+assign device_irqs = {14'h0, int1_uartrx, int0_timeout};
+
+pic pic01 (
+    .clk             (clk),
+    .rst_n           (rst_n),
+    .pic_cpu_bus     (pic_cpu_bus.pic),      // CPU interface
+    .pic_mmio_bus    (pic_mmio_bus.pic),     // MMIO interface  
+    .enable_int_i    (enable_int),           
+    .irq_i           (device_irqs),          // Direct connection
+    .dbg_bus_pic     (dbg_bus_pic)     
+);
+
 
 
 // Int 1 Shifter
@@ -323,329 +292,6 @@ end
 // create a delayed versions of int0_timeout
 assign int1_timeout = int00_shft[15];  // Int#1
 assign int2_timeout = int00_shft[5];  // Int#2
-
-//================================================================
-// Conditional Memory Instantiation
-//================================================================
-// Use .hex file for fast simulation model without having to update
-// BRAM IP.
-
-logic [`ADDR_WIDTH-2:0] dmem_word_addr;
-// Convert the byte address from the CPU to a word address for the BRAM
-// by right-shifting by one (equivalent to dropping the LSB).
-assign dmem_word_addr = dmem_bus.addr >> 1;
-
-`ifdef MEMORYMODELSIM
-    
-    initial begin
-        $display("SIM_INFO: Compiling with SIMULATION behavioral memory model.");
-        $display("SIM_INFO: Loading instruction memory from '%s'.", `IMEM_HEX_FILE);
-    end
-
-    // Behavioral Instruction Memory
-    logic [7:0] instruction_memory [0:`INSTRUCTION_MEMORY_BYTES-1];
-    // Data Memory
-    logic [`DATA_WIDTH-1:0] data_memory [0: (`DATA_MEMORY_BYTES/2)-1];
-    
-    // Initialize data memory
-    initial begin
-        for (int i = 0; i > (`DATA_MEMORY_BYTES/2)-1; i++) begin
-            data_memory[i] <= 16'h0; // clear data memory
-        end
-    end
-    
-     // Read the .hex file and place in Instruction Memory, much faster process
-    // than updating the BRAM IP.
-    initial $readmemh(`IMEM_HEX_FILE, instruction_memory);
-
-    // ********************
-    // Read from Instruction and Data memory
-    // ********************
-    // Use bus interfaces. One clock latency to match BRAM behavior.
-    always_ff @(posedge clk) begin
-        // The memory drives the read data signal of the instruction bus
-        imem_bus.rdata  <= instruction_memory[imem_bus.addr];
-        // The memory drives the dedicated BRAM read data
-//        dmem_bram_rdata_i = data_memory[dmem_bus.addr >> 1];
-        dmem_bram_rdata_i = data_memory[dmem_word_addr_fsm];  // signal from FSM
-    end
-    
-    // ********************
-    // Write to Data memory
-    // ********************
-    // Use bus interfaces.
-    // One clock latency to match BRAM behavior
-    always_ff @(posedge clk) begin
-        // Check the write enable from the data bus
-        if (dmem_wren_fsm) begin
-            // Use the address and write data from the data bus
-            data_memory[dmem_word_addr_fsm] <= dmem_word_data_fsm; // signal from FSM
-        end
-    end
-    
-`else
-    // --- FOR SYNTHESIS: Use the real BRAM IP Core ---
-    // BRAM IP must be updated with the lastest .coe to initialize the
-    // instruction memory with the last C-like program or assembly language
-    // program.
-    initial begin
-        $display("INFO: Compiling with SYNTHESIS BRAM IP Core model.");
-    end
-    
-
-    // BRAM: Program Memory IP Core
-    // NOTE: instruction memory access is 8-bits while data memory access is 
-    // 16-bit so a true dual port BRAM was used to provide both 8-bit and
-    // 16-bit access in a single memory.
-    abCore16_blk_mem cpu_mem (
-        // Instruction Memory Interface (connected to imem_bus, 8-bit access)
-        // Instruction memory is a ROM or read-only so wea is always 1'b0.
-        .clka   ( clk ),
-        .ena    ( 1'b1 ),    // dout always active
-        .wea    ( 1'b0 ),
-        .addra  ( imem_bus.addr[12:0] ),
-        .dina   ( 9'b0 ),
-        .douta  ( imem_bus.rdata ),   // BRAM drives the interface's read data
-        // Data Memory Interface (connected to dmem_bus, 16-bit access)
-        .clkb   ( clk ),
-        .enb    ( 1'b1 ),    // dout always active
-        .web    ( dmem_wren_fsm ),               // signal from FSM
-        .addrb  ( {1'b0, dmem_word_addr_fsm} ),  // signal from FSM
-        .dinb   ( {2'b00, dmem_word_data_fsm} ), // signal from FSM
-        .doutb  ( dmem_bram_rdata_i )    // BRAM drives the dedicated bus
-    );
-`endif
-
-// ================
-// Byte Write Logic
-// ================
-logic    dmem_byt_wrflg_r;
-logic    dmem_addr_lsb_r;
-logic    dmem_addr_lsb_2r;
-//logic    wr_flg_redge;
-logic [`ADDR_WIDTH-2:0] dmem_word_addr_sav;
-logic [15:0]            dmem_wdata_r;
-logic [15:0]            dmem_wdata_low_sav;
-logic [15:0]            dmem_wdata_hi_sav;
-
-
-// 1 clk delay
-always_ff@(posedge clk) begin
-   if(!rst_n) begin
-       dmem_addr_lsb_r      <= 1'b0;
-       dmem_addr_lsb_2r     <= 1'b0;
-       dmem_byt_wrflg_r     <= 1'b0;
-       // data
-       dmem_wdata_r         <= 16'h0;            
-   end
-   else begin 
-       dmem_addr_lsb_r      <= dmem_bus.addr[0];
-       dmem_addr_lsb_2r     <= dmem_addr_lsb_r;
-       dmem_byt_wrflg_r     <= gpio_bus.dmem_byt_wrflg;
-       // data
-       dmem_wdata_r         <= dmem_bus.wdata;      // TODO: verify
-   end
-end
-
-
-// capture address for the complete READ-Modify-Write sequence
-always_ff@(posedge clk) begin
-   if(!rst_n) begin
-       // address
-       dmem_word_addr_sav        <= '0;
-//       dmem_wdata_r         <= 16'h0;
-   end
-   else begin 
-       if (gpio_bus.dmem_byt_wrflg) begin
-           dmem_word_addr_sav        <= dmem_word_addr;
-//           dmem_wdata_r         <= dmem_bus.wdata;      // TODO: verify
-           
-       end
-   end
-end
-
-// capture data for the complete READ-Modify-Write sequence
-always_ff@(posedge clk) begin
-   if(!rst_n) begin
-       // data
-       dmem_wdata_low_sav        <= 16'h0;
-       dmem_wdata_hi_sav         <= 16'h0;
-   end
-   else begin 
-       if (dmem_byt_wrflg_r) begin
-           dmem_wdata_low_sav        <= {dmem_bram_rdata_i[15:8], dmem_wdata_r[7:0]};
-           dmem_wdata_hi_sav         <= {dmem_wdata_r[7:0], dmem_bram_rdata_i[7:0]};
-//           dmem_wdata_low_sav        <= {dmem_bram_rdata_i[15:8], dmem_bus.wdata[7:0]};
-//           dmem_wdata_hi_sav         <= {dmem_bus.wdata[7:0], dmem_bram_rdata_i[7:0]};
-       end
-   end
-end
-
-
-// Rising edge gpio_bus.dmem_byt_wrflg
-//logic [1:0] wr_flg_shft;
-//always_ff@(posedge clk) begin
-//   if(!rst_n) begin
-//       wr_flg_shft <= 2'b00; 
-//   end
-//   else begin 
-//       wr_flg_shft <= { wr_flg_shft[0], gpio_bus.dmem_byt_wrflg };
-//   end
-//end
-//assign wr_flg_redge = wr_flg_shft == 2'b01;
-
-// **********
-// Write FSM
-// **********
-// We have to perform a Read-Modify-Write sequence to update one byte of a
-// 16-bit word.
-// State machine for byte Write
-typedef enum logic [1:0] {
-    IDLE,
-    MEM_READ,
-    MODIFY,
-    MEM_WRITE
-} wr_state_t;
-    
-wr_state_t wr_state;
-    
-always_ff @(posedge clk) begin
-    if (!rst_n) begin
-        wr_state <= IDLE;
-    end else begin 
-        case (wr_state)
-            IDLE: begin
-                if ( gpio_bus.dmem_byt_wrflg ) begin
-                    wr_state <= MEM_READ;
-                end
-            end
-            // Read
-            MEM_READ: begin
-                wr_state <= MODIFY;
-            end
-            // Modify-Write
-            MODIFY: begin
-                wr_state <= MEM_WRITE;
-            end
-            // Write
-            MEM_WRITE: begin
-                wr_state <= IDLE;
-            end
-        endcase
-    end
-end
-
-// Assign values to wren, addr, and data during each stage of the 
-// Read-Modify-Write sequence
-always_comb begin
-    if(!rst_n) begin
-        dmem_wren_fsm       <= 1'b0;
-        dmem_word_addr_fsm  <= '0;
-        dmem_word_data_fsm  <= '0;
-    end
-    else begin 
-        // defaults
-        dmem_wren_fsm <= 1'b0;
-        if ( wr_state == IDLE ) begin 
-	        dmem_wren_fsm       <= dmem_bus.wren; 
-		    dmem_word_addr_fsm  <= dmem_word_addr;
-		    dmem_word_data_fsm  <= dmem_bus.wdata;
-	    end
-		if ( wr_state == MEM_READ ) begin 
-		    dmem_wren_fsm      <= 1'b0;           // do not write to memory yet
-		    dmem_word_addr_fsm <= dmem_word_addr;
-		    dmem_word_data_fsm <= dmem_wdata_r;
-		end
-		
-		if ( wr_state == MODIFY ) begin 
-		    dmem_wren_fsm         <= 1'b0;       // do not write to memory yet
-		    dmem_word_addr_fsm    <= dmem_word_addr_sav;
-		    dmem_word_data_fsm <= dmem_wdata_r;	
-        end	 
-        
- 		if ( wr_state == MEM_WRITE ) begin  
-		    dmem_wren_fsm         <= 1'b1;        // write to memory
-		    dmem_word_addr_fsm    <= dmem_word_addr_sav;
-		    //dmem_word_data_fsm <= dmem_wdata_r;
-		    // Select the correct byte to update
-            if ( dmem_addr_lsb_2r ) begin
-                // write new byte to upper byte
-                // dmem_word_data_fsm = {dmem_bus.wdata[7:0], dmem_bram_rdata_i[7:0]};
-                dmem_word_data_fsm = dmem_wdata_hi_sav;
-            end else begin
-               // write new byte to lower byte
-               // dmem_word_data_fsm = {dmem_bram_rdata_i[15:8], dmem_bus.wdata[7:0]};
-               dmem_word_data_fsm = dmem_wdata_low_sav;
-            end	
-		end
-		
-    end
-end
-
-
-//================================================================
-// Memory-mapped IO range check and data mux
-//================================================================
-// Memory-mapped IO between 0x1800 and 0x1900 (6144 and 6400)
-// --- Data Memory Read Mux ---
-// This logic now determines what data gets driven INTO the dmem_bus
-//assign memorymap_range = ( dmem_bus.addr >= 6144 && dmem_bus.addr < 6400 );
-assign memorymap_range = ( dmem_bus.addr >= MMIO_ADDRESS_BASE && 
-                           dmem_bus.addr < (MMIO_ADDRESS_BASE + MMIO_ADDRESS_RANGE) );
-
-// ================
-// Byte Read Logic
-// ================
-// Reading byte from BRAM (LOADIB)
-// Memory Data MUX select
-logic [1:0] dmem_rd_data_sel;
-always_comb begin
-    dmem_rd_data_sel = 2'b00;         // default:  Read 16-bit word from BRAM
-    // Byte Read
-    if (gpio_bus.dmem_byt_rden) begin // Byte Read is Active
-        if (!memorymap_range) begin   // Read from BRAM
-            // Select 2'b10 for lower byte, 2'b11 for upper byte
-            dmem_rd_data_sel = {1'b1, dmem_bus.addr[0]};
-        end
-    end
-    // NOTE: Byte access to memory-mapped registers is undefined and falls to default
-    else begin // Word Read  (16-bits)
-        if (memorymap_range) begin     // Read 16-bit word from memory-mapped registers
-            dmem_rd_data_sel = 2'b01;
-        end 
-        else begin                     // Read 16-bit word from BRAM
-            dmem_rd_data_sel = 2'b00;
-        end
-    end
-end
-
-//always_comb begin
-//    if (memorymap_range) begin
-//        dmem_bus.rdata = mmio_rd_data;      // Read data comes from memory-mapped IO
-//    end else begin
-//        dmem_bus.rdata = dmem_bram_rdata_i; // Read data comes from BRAM
-//    end
-//end
-
-// Memory Data MUX
-//     0   0    Read 16-bit word from BRAM
-//     0   1    Read 16-bit word from memory-mapped registers
-//     1   0    Read 16-bit word from BRAM and use lower byte
-//     1   1    Read 16-bit word from BRAM and use upper byte
-always_comb begin
-    case( dmem_rd_data_sel )
-        // Read 16-bit word from BRAM
-        2'b00: dmem_bus.rdata = dmem_bram_rdata_i;
-        // Read 16-bit word from memory-mapped registers
-        2'b01: dmem_bus.rdata = mmio_rd_data;
-        // Read 16-bit word from BRAM and use lower 8-bit byte
-        2'b10: dmem_bus.rdata = {8'h0,dmem_bram_rdata_i[7:0]};
-        // Read 16-bit word from BRAM and use upper 8-bit byte
-        2'b11: dmem_bus.rdata = {8'h0,dmem_bram_rdata_i[15:8]};
-        default: dmem_bus.rdata = dmem_bram_rdata_i;
-    endcase  
-end
-
     
 //================================================================
 // LED Control Logic
@@ -708,10 +354,8 @@ logic [107:0] probe0;
 
 assign probe0 = { led3_o, uart_bus.tx_start, uart_bus.rx_fifo_avail, dmem_bus.wren,
                   dbg_bus_pic, dbg_bus_cu, dbg_bus_dp };
-                  
-//assign probe0 = { led3_o, uart_bus.tx_start, uart_bus.rx_fifo_avail, dmem_bus.wren,
-//                  96'h0 };
 
+// Debug logic analyzer
 ila_0 ab_ILA (
 	.clk     (clk),
 	.probe0  (probe0)
