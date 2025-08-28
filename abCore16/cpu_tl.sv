@@ -137,15 +137,14 @@ assign rst_n = locked;
 // Pass the system clock and reset to them.
 // Instantiate the interfaces that will bundle signals between modules.
 // Pass the system clock and reset to them.
-// Instances of Interfaces
 timer_if timer_bus ( .clk(clk), .rst_n(rst_n) );         // Instance of Interface
 uart_if  uart_bus  ( .clk(clk), .rst_n(rst_n) );
 // --- PIC interfaces ---
 pic_if      pic_cpu_bus  ( .clk(clk), .rst_n(rst_n) );   // PIC to CPU signals
 pic_mmio_if pic_mmio_bus ( .clk(clk), .rst_n(rst_n) );   // PIC to MMIO signals
 // --- CPU Bus Interfaces ---
-dmem_bus_if dmem_bus ( .clk(clk), .rst_n(rst_n) );
-gpio_bus_if gpio_bus ( .clk(clk), .rst_n(rst_n) );
+dmem_bus_if dmem_mmio_bus ( .clk(clk), .rst_n(rst_n) );
+gpio_bus_if gpio_wr_bus ( .clk(clk), .rst_n(rst_n) );
 
 //================================================================
 // Top-Level Port Connections and Logic
@@ -163,9 +162,9 @@ end
 assign uart_rx_sync = uart_rx_shft[1];
 
 // --- GPIO Output Assignment ---
-// The top-level output ports are now driven by the gpio_bus interface
-assign gpio_out_o    = gpio_bus.data;
-assign gpio_out_we_o = gpio_bus.wren;
+// The top-level output ports are now driven by the gpio_wr_bus interface
+assign gpio_out_o    = gpio_wr_bus.data;
+assign gpio_out_we_o = gpio_wr_bus.wren;
 
 
 //================================================================
@@ -180,8 +179,8 @@ cpu_system cpu_system01 (
     .clk        (clk),
     .rst_n      (rst_n),
     // External interfaces to peripherals/system
-    .dmem_bus   (dmem_bus.mmio_writer),          // For MMIO access
-    .gpio_bus   (gpio_bus.gpio_writer),          // GPIO interface
+    .dmem_mmio_bus  (dmem_mmio_bus.mmio_writer),          // For MMIO access
+    .gpio_wr_bus    (gpio_wr_bus.gpio_writer),          // GPIO interface
     // PIC interfaces
     .pic_cpu_bus  (pic_cpu_bus.cpu),         // CPU-PIC interface  
     // Direct connections
@@ -200,7 +199,7 @@ cpu_system cpu_system01 (
 mmio_regs mmio_regs01 (
     .clk                    (clk),
     .rst_n                  (rst_n),
-    .dmem_bus               (dmem_bus.mmio_reader),      // CHANGED: New modport
+    .dmem_bus               (dmem_mmio_bus.mmio_reader),      // CHANGED: New modport
     .timer_bus              (timer_bus.controller),     // timer interface
     .uart_bus               (uart_bus.controller),      // uart interface
     .pic_mmio_bus           (pic_mmio_bus.mmio),         // CHANGED: New PIC interface
@@ -229,7 +228,7 @@ uart_mn #(
     .uart_bus          (uart_bus.peripheral),   // uart interface
     .i_tx_start_manual (tx_start_btn),
     .i_uart_rx_access  (uart_rx_access),
-    .gpio_bus          (gpio_bus.peripheral),    // gpio and mmio
+    .gpio_bus          (gpio_wr_bus.peripheral),    // gpio and mmio
     .o_uart_tx         (uart_tx_o),
     .i_uart_rx         (uart_rx_sync)
 );
@@ -314,7 +313,7 @@ assign led2_o = count[22];
 // Use abCore16 software counters to toggle LED
 // Memory-mapped I/O for LED control
 logic led3;
-// This block uses the dmem_bus interface signals
+// This block uses the dmem_mmio_bus interface signals
 always_ff@(posedge clk) begin
    if(!rst_n) begin 
        led3_o <= 1'b0; 
@@ -324,8 +323,8 @@ always_ff@(posedge clk) begin
        // LED memory-mapped IO address = 0x1818 (6168)
        // Check for a write to the correct address using the DATA MEMORY BUS
        // ADDRESS_LED_CTRL
-       if ( (dmem_bus.wren == 1'b1) &&  (dmem_bus.addr == ADDRESS_LED_CTRL) ) begin
-         if ( dmem_bus.wdata == 0 ) begin 
+       if ( (dmem_mmio_bus.wren == 1'b1) &&  (dmem_mmio_bus.addr == ADDRESS_LED_CTRL) ) begin
+         if ( dmem_mmio_bus.wdata == 0 ) begin 
              led3_o <= 1'b0;
              led3   <= 1'b0;
          end
@@ -347,12 +346,12 @@ end
 //                                 104 signals
 //--- ILA_0  ---
 logic [107:0] probe0;
-// The ILA probe uses the dmem_bus interface signals
-//assign probe0[31:0] = { dmem_bus.addr[8:0], uart_bus.rx_data, uart_bus.tx_data, uart_tx_o, uart_rx_sync, 
+// The ILA probe uses the dmem_mmio_bus interface signals
+//assign probe0[31:0] = { dmem_mmio_bus.addr[8:0], uart_bus.rx_data, uart_bus.tx_data, uart_tx_o, uart_rx_sync, 
 //                        uart_bus.tx_start, 1'b0, uart_bus.rx_fifo_avail,
-//                        dmem_bus.wren, led3_o };
+//                        dmem_mmio_bus.wren, led3_o };
 
-assign probe0 = { led3_o, uart_bus.tx_start, uart_bus.rx_fifo_avail, dmem_bus.wren,
+assign probe0 = { led3_o, uart_bus.tx_start, uart_bus.rx_fifo_avail, dmem_mmio_bus.wren,
                   dbg_bus_pic, dbg_bus_cu, dbg_bus_dp };
 
 // Debug logic analyzer
