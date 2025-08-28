@@ -59,7 +59,6 @@ module control_unit (
     output logic [1:0] rf_write_data_sel_out,
     // Flags Register Control
     output logic       flags_write_en_out,
-//    output logic       reti_flags_sel_out,
     // Immediate Value
     output logic [`DATA_WIDTH-1:0] imm_val_to_dp_out,
     // ALU Control
@@ -110,8 +109,6 @@ module control_unit (
     logic       enable_int_clr;
     logic       intrpt_in_sav;
     logic       int_cond_met;
-//    logic       intrpt_in_sav_clr;
-    
     logic       mmio_rden;
     
     //================================================================
@@ -254,7 +251,7 @@ module control_unit (
                     `OP_RET, `OP_STORFR: next_state = S_MEM_ACCESS;
                     `OP_RETI: next_state = S_PCWREN;
                     `OP_LOADI: next_state = S_MEM_ACCESS;           // July 11, 2025; fix for pointers
-                    `OP_LOADFR: next_state = S_MEM_ACCESS;                        // TODO: check
+                    `OP_LOADFR: next_state = S_MEM_ACCESS;
                     `OP_L_AND, `OP_L_OR, `OP_L_NOT: next_state = S_WRITEBACK;
                     `OP_LOAD, `OP_ADD, `OP_SUB, `OP_CMP, `OP_MUL, `OP_INC, `OP_DEC, `OP_AND, `OP_OR, `OP_XOR, `OP_NOT,
                     `OP_SHL, `OP_SHR, `OP_MOV, `OP_INP, `OP_MOVFRSP: next_state = S_WRITEBACK;
@@ -273,14 +270,13 @@ module control_unit (
             // For Jumps, we need one clk delay to get new opcode loaded into ir_opcode_reg
             S_BRANCH_DLY:
                 case (ir_opcode_reg)
-                    `OP_RET: next_state = S_MEM_ACCESS;     // TODO: Check this
+//                    `OP_RET: next_state = S_MEM_ACCESS;     // TODO: Check this
                     default: next_state = S_FETCH_OPCODE;
                 endcase
                 
             S_MEM_ACCESS:
                 case (ir_opcode_reg)
                     `OP_LOADM, `OP_LOADI, `OP_LOADB, `OP_LOADIB, `OP_POP, `OP_INM: next_state = S_WRITEBACK;
-                    `OP_LOADFR: next_state = S_WRITEBACK;                                    // TODO: check
                     `OP_LOADBFR: next_state = S_WRITEBACK;  // NEW: Added byte load instructions
 					`OP_LOADFR: next_state = S_WRITEBACK;  
                     `OP_RET: next_state = S_PCWREN;
@@ -519,7 +515,6 @@ module control_unit (
                                    // data out to DMEM
                                    dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt_val
                                    dmem_byt_wrflg_out=1'b1;                // data memory byte read
-//                                 dmem_byte_en_out=1'b1;                 // Enable byte access
                                    // write to DMEM
                                    dmem_write_en_out=1'b1;                // write to dmem                // Enable byte access
                                end 
@@ -747,7 +742,6 @@ module control_unit (
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;  // alu_result_internal
                             alu_op_out=`ALU_PASS_A;                // [Rs_addr]
                             alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs_addr
-                //            alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
                             // data out to DMEM
                             dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt_val
                         end
@@ -755,7 +749,6 @@ module control_unit (
                             dmem_addr_sel_out=`DMEM_ADDR_SRC_ALU;  // alu_result_internal
                             alu_op_out=`ALU_PASS_A;                // [Rs_addr]
                             alu_src_a_sel_out=`ALU_A_SRC_REG;      // src Rs_addr
-//                            alu_src_b_sel_out=`ALU_B_SRC_IMM;      // IMM
                             // data out to DMEM
                             dmem_data_sel_out=`DMEM_DATA_SRC_RF2;  // data from Rt_val
                             // write to DMEM
@@ -811,7 +804,6 @@ module control_unit (
                             dmem_write_en_out=1'b1;                // write to dmem
                         end 
                                               
-                    // Add all other instructions... this is a simplified example.
                 endcase
             end
         endcase
