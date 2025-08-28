@@ -43,8 +43,6 @@ module core (
     output logic       halted_o
 );
 
-//logic [20:0] dbg_bus_cu;      // 21 signals
-//logic [21:0] dbg_bus_dp;      // 22 signals 
 
     //================================================================
     // Internal Wires for CPU buses
