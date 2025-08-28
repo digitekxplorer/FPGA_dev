@@ -57,6 +57,12 @@ interface dmem_bus_if (input logic clk, input logic rst_n);
         input  wren, addr, wdata
         // Note: NO rdata connection - MMIO provides data through separate output
     );
+        
+    // NEW: View from CPU that only Writes bus signals, never drives rdata
+    modport mmio_writer (
+        output  wren, addr, wdata
+        // Note: NO rdata connection - MMIO provides data through separate output
+    );
 endinterface
 
 
@@ -84,6 +90,15 @@ interface gpio_bus_if (input logic clk, input logic rst_n);
         input mmio_rden,
         input dmem_byt_rden,
         input dmem_byt_wrflg
+    );
+    
+    // View from the CPU (controller)
+    modport gpio_writer (
+        output data,
+        output wren,
+        output mmio_rden
+//        output dmem_byt_rden,
+//        output dmem_byt_wrflg
     );
        
 endinterface
@@ -119,7 +134,7 @@ interface pic_mmio_if (input logic clk, input logic rst_n);
     logic [ 3:0] eoi_irq_num;  // EOI IRQ number
     logic        eoi_update;   // EOI update pulse
     
-    // MMIO controller side
+    // MMIO controller side (from mmio registers)
     modport mmio (
         input  irr, isr,                           // Read status from PIC
         output imr, eoi_irq_num, eoi_update       // Control signals to PIC
@@ -130,6 +145,7 @@ interface pic_mmio_if (input logic clk, input logic rst_n);
         output irr, isr,                          // Status to MMIO
         input  imr, eoi_irq_num, eoi_update      // Control from MMIO
     );
+    
 endinterface
 
 // ******************************
