@@ -14,6 +14,7 @@
 // Dependencies: pio_defs.svh
 // 
 // Revision:
+// Revision 1.1 - Instruction set complete
 // Revision 0.01 - File Created
 // Additional Comments:
 // 
@@ -75,6 +76,10 @@ module pio_dp #(
     input  logic [2:0]  mov_dest_sel,
     input  logic [2:0]  mov_src_sel,
     input  logic [1:0]  mov_op_sel,
+    // SET control signals
+    input  logic        set_write_en,
+    input  logic [2:0]  set_dest_sel,    // 3 bits for destination
+    input  logic [4:0]  set_data_value,
     // FIFO status inputs for STATUS register (ADD IF MISSING)
     input  logic        tx_fifo_empty,
     input  logic        rx_fifo_full,
@@ -121,6 +126,7 @@ module pio_dp #(
     logic [4:0]            isr_shift_counter;
     logic [GPIO_WIDTH-1:0] gpio_output_reg;
     logic [GPIO_WIDTH-1:0] gpio_direction_reg;
+    logic [REG_WIDTH-1:0]  set_extended_data;  // SET data extended to 32 bits
     
     // Internal Signals
     logic [REG_WIDTH-1:0] x_reg_next;
@@ -134,6 +140,11 @@ module pio_dp #(
     logic [REG_WIDTH-1:0] mov_processed_data;  // Data after operation
     logic [REG_WIDTH-1:0] status_register;     // STATUS register value
     logic [REG_WIDTH-1:0] mov_write_data;      // Final data for destination
+    
+    
+    // Zero-extend the 5-bit SET data to 32 bits
+    assign set_extended_data = {27'b0, set_data_value};
+    
     
     //================================================================
     // Program Counter
@@ -199,9 +210,17 @@ always_ff @(posedge clk or negedge rst_n) begin
             case (x_reg_src_sel)
                 `REG_SRC_OSR: x_register <= osr_value;
                 `REG_SRC_ISR: x_register <= isr_value;
-                `REG_SRC_IMMEDIATE: x_register <= data_immediate;
+//                `REG_SRC_IMMEDIATE: x_register <= data_immediate;
+                `REG_SRC_IMMEDIATE: begin
+                    // Check if this is a SET instruction writing to X
+                    if (set_write_en && set_dest_sel == `SET_DEST_X) begin
+                        x_register <= set_extended_data;
+                    end else begin
+                        x_register <= data_immediate;
+                    end               
+                end
                 `REG_SRC_GPIO: x_register <= gpio_in;
-                default: x_register <= osr_value;
+                default: x_register <= data_immediate;
             endcase
         end
         // X register decrement
@@ -227,9 +246,17 @@ always_ff @(posedge clk or negedge rst_n) begin
             case (y_reg_src_sel)
                 `REG_SRC_OSR: y_register <= osr_value;
                 `REG_SRC_ISR: y_register <= isr_value;
-                `REG_SRC_IMMEDIATE: y_register <= data_immediate;
+//                `REG_SRC_IMMEDIATE: y_register <= data_immediate;
+                `REG_SRC_IMMEDIATE: begin
+                    // Check if this is a SET instruction writing to Y
+                    if (set_write_en && set_dest_sel == `SET_DEST_Y) begin
+                        y_register <= set_extended_data;
+                    end else begin
+                        y_register <= data_immediate;
+                    end
+                end
                 `REG_SRC_GPIO: y_register <= gpio_in;
-                default: y_register <= osr_value;
+                default: y_register <= data_immediate;
             endcase
         end
         // Y register decrement
@@ -399,14 +426,23 @@ end
             `GPIO_SRC_OSR:       gpio_write_data = osr_shifted_data;
             `GPIO_SRC_X_REG:     gpio_write_data = x_register;
             `GPIO_SRC_Y_REG:     gpio_write_data = y_register;
-            `GPIO_SRC_IMMEDIATE: gpio_write_data = data_immediate;
-            default:             gpio_write_data = osr_shifted_data;
+//            `GPIO_SRC_IMMEDIATE: gpio_write_data = data_immediate;
+            `GPIO_SRC_IMMEDIATE: begin
+                // Check if this is a SET instruction
+                if (set_write_en && (set_dest_sel == `SET_DEST_PINS || set_dest_sel == `SET_DEST_PINDIRS)) begin
+                    gpio_write_data = set_extended_data;
+                end else begin
+                    gpio_write_data = data_immediate;
+                end
+            end
+            default:             gpio_write_data = data_immediate;
         endcase
     end
     
 //================================================================
 // GPIO Output Registers (Modified to include MOV writes)
 //================================================================
+logic [GPIO_WIDTH-1:0] pin_mask;
 always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         gpio_output_reg <= '0;
@@ -414,14 +450,14 @@ always_ff @(posedge clk or negedge rst_n) begin
     end else begin
         // Existing OUT instruction logic
         if (gpio_write_en) begin
-            logic [GPIO_WIDTH-1:0] pin_mask;
+//            logic [GPIO_WIDTH-1:0] pin_mask;
             pin_mask = ((32'h0000_0001 << pinctrl_out_count) - 1) << pinctrl_out_base;
             gpio_output_reg <= (gpio_output_reg & ~pin_mask) | 
                               ((gpio_write_data << pinctrl_out_base) & pin_mask);
         end
         
         if (gpio_dir_write_en) begin
-            logic [GPIO_WIDTH-1:0] pin_mask;
+//            logic [GPIO_WIDTH-1:0] pin_mask;
             pin_mask = ((32'h0000_0001 << pinctrl_out_count) - 1) << pinctrl_out_base;
             gpio_direction_reg <= (gpio_direction_reg & ~pin_mask) | 
                                  ((gpio_write_data << pinctrl_out_base) & pin_mask);
@@ -437,7 +473,6 @@ always_ff @(posedge clk or negedge rst_n) begin
     end
 end
 
-    
     //================================================================
     // STATUS Register Construction
     //================================================================
