@@ -14,6 +14,7 @@
 // Dependencies: pio_defs.svh
 // 
 // Revision:
+// Revision 1.1 - Instruction set complete
 // Revision 0.01 - File Created
 // Additional Comments:
 // 
@@ -114,6 +115,16 @@ module pio_cu #(
     output logic [2:0]  mov_dest_sel,
     output logic [2:0]  mov_src_sel,
     output logic [1:0]  mov_op_sel,
+    // SET Control
+    output logic        set_write_en,
+    output logic [2:0]  set_dest_sel,   // 3 bits for destination
+    output logic [4:0]  set_data_value,
+    // IRQ Control
+    output logic        irq_operation_en,
+    output logic        irq_set_operation,
+    output logic        irq_wait_for_clear,
+    output logic [4:0]  irq_target_index,
+    output logic [7:0]  irq_set,        // Set IRQ flags
     
     // FIFO Control
     output logic        tx_fifo_read,
@@ -133,7 +144,6 @@ module pio_cu #(
     //================================================================
     typedef enum logic [3:0] {
         S_RESET,
-//        S_FETCH,
         S_FET_DEC,
         S_EXECUTE,
         S_WAIT_CONDITION,
@@ -171,6 +181,17 @@ module pio_cu #(
     logic [2:0]  mov_src;      // Source field
     logic [1:0]  mov_op;       // Operation field	
     
+    // SET instruction fields
+    logic [2:0]  set_dest;     // Destination field (3 bits)
+    logic [4:0]  set_data;     // Data field (5 bits)
+    // IRQ
+    logic        irq_clear_flag;    // IRQ clear flag
+    logic        irq_wait_flag;     // IRQ wait flag  
+    logic [4:0]  irq_index_field;   // IRQ index field
+    
+    // IRQ control signals
+    logic        irq_waiting;          // Currently waiting for IRQ clear
+    
     // Debug: instructions
     logic jmp_instr;
     logic wait_instr;
@@ -179,16 +200,18 @@ module pio_cu #(
     logic push_instr;
     logic pull_instr;
     logic mov_instr;
+    logic set_instr;
+    logic irq_instr;
     // Note: block_flag is shared between PUSH and PULL (bit 5)															   
     
     // Internal state
     logic [4:0]  delay_counter;
     logic        waiting;
-//    logic        condition_met;
     logic        jmp_condition_met;
     logic        wait_condition_met;
     logic        autopull_needed;
     logic        autopush_needed;
+    logic [2:0]  computed_irq_index;
     
     //================================================================
     // Instruction Decode
@@ -229,14 +252,14 @@ module pio_cu #(
         mov_op = instruction_data[4:3];    // Operation (2 bits) [4:3]  
         mov_src = instruction_data[2:0];   // Source (3 bits) [2:0]
     
-    // IRQ instruction fields
-    // irq_clear = instruction_data[6];     // Clear flag
-    // irq_wait = instruction_data[5];      // Wait flag
-    // irq_index = instruction_data[4:0];   // IRQ index
+        // IRQ instruction fields
+        irq_clear_flag = instruction_data[6];     // Clear flag
+        irq_wait_flag = instruction_data[5];      // Wait flag
+        irq_index_field = instruction_data[4:0];   // IRQ index
     
-    // SET instruction fields
-    // set_dest = instruction_data[6:5];    // Destination
-    // set_data = instruction_data[4:0];    // Data (5 bits)									
+        // SET instruction fields
+        set_dest = instruction_data[7:5];    // Destination (3 bits) [7:5]
+        set_data = instruction_data[4:0];    // Data value (5 bits) [4:0]									
     end
     
     // Debug
@@ -249,13 +272,17 @@ module pio_cu #(
     assign out_instr  = (opcode[3:1] == 3'b011);  // debug
     assign push_instr = (opcode == `OP_PUSH);     // debug
     assign pull_instr = (opcode == `OP_PULL);     // debug
-    assign mov_instr  = (opcode[3:1] == 3'b101); // debug
+    assign mov_instr  = (opcode[3:1] == 3'b101);  // debug
+    assign irq_instr  = (opcode == `OP_IRQ);      // debug
+ //   assign irq_instr  = (opcode[3:1] == 3'b110);  // debug
+    assign set_instr  = (opcode[3:1] == 3'b111);  // debug
     
     //================================================================
     // Condition Evaluation
     //================================================================
+    logic [2:0] irq_index_eval;
     always_comb begin
-        logic [2:0] irq_index;
+//        logic [2:0] irq_index;
         casez (opcode)
             `OP_JMP: begin
                 case (jmp_cond)
@@ -278,11 +305,11 @@ module pio_cu #(
                     2'b01: signal_value = gpio_state[(pinctrl_in_base + wait_index) % 32]; // PIN
                     2'b10: begin // IRQ
                         if (wait_index[4]) begin
-                            irq_index = (wait_index[2:0] + state_machine_id) % 4;
+                            irq_index_eval = (wait_index[2:0] + state_machine_id) % 4;
                         end else begin
-                            irq_index = wait_index[2:0];
+                            irq_index_eval = wait_index[2:0];
                         end
-                        signal_value = irq_flags[irq_index];
+                        signal_value = irq_flags[irq_index_eval];
                     end
                     2'b11: signal_value = 1'b0; // Reserved
                     default: signal_value = 1'b0;
@@ -290,10 +317,33 @@ module pio_cu #(
                 wait_condition_met = (signal_value == wait_polarity);
             end
             
+            `OP_IRQ: begin
+                // IRQ wait condition logic
+                if (irq_index_field[4]) begin
+                    irq_index_eval = (irq_index_field[2:0] + state_machine_id) % 4;
+                end else begin
+                    irq_index_eval = irq_index_field[2:0];
+                end
+            
+                if (irq_wait_flag) begin
+                    if (irq_clear_flag) begin
+                        // Waiting for IRQ clear operation to complete
+                        wait_condition_met = !irq_flags[irq_index_eval];
+                    end else begin
+                        // Waiting for IRQ to be cleared by system after we set it
+                        wait_condition_met = !irq_flags[irq_index_eval];
+                    end
+                end else begin
+                    // No wait required
+                    wait_condition_met = 1'b1;
+                end
+            end
+            
             default: begin 
-                        wait_condition_met = 1'b1; 
-                        jmp_condition_met = 1'b1;
-                     end
+                    wait_condition_met = 1'b1; 
+                    jmp_condition_met = 1'b1;
+            end
+            
         endcase
     end
     
@@ -327,14 +377,16 @@ module pio_cu #(
     end
     
     // Next state logic
+    logic fifo_blk_cond_met;
+    assign fifo_blk_cond_met = opcode == `OP_PULL && tx_fifo_empty && block_flag;
+    
+    
     always_comb begin
         next_state = current_state;
         
         case (current_state)
-//            S_RESET: next_state = S_FETCH;
             S_RESET: next_state = S_FET_DEC;
             
-//            S_FETCH: next_state = S_DECODE;
             
             S_FET_DEC: begin
                 casez (opcode)
@@ -345,10 +397,9 @@ module pio_cu #(
                     `OP_PUSH: next_state = S_EXECUTE;
                     `OP_PULL: next_state = S_EXECUTE;
                     `OP_MOV:  next_state = S_EXECUTE;        // MOV
-//                    4'b110?: next_state = S_EXECUTE;        // IRQ
-//                    4'b111?: next_state = S_EXECUTE;        // SET																	
+                    `OP_IRQ:  next_state = (irq_wait_flag) ? S_WAIT_CONDITION : S_EXECUTE;
+                    `OP_SET:  next_state = S_EXECUTE;        // SET																	
                     // Add other instructions
-//                    default: next_state = S_FETCH; // NOP
                     default: next_state = S_RESET; // NOP
                 endcase
             end
@@ -359,7 +410,6 @@ module pio_cu #(
                         if (delay_value != '0) begin
                             next_state = S_DELAY;
                         end else begin
-//                            next_state = S_FETCH;
                             next_state = S_FET_DEC;
                         end
                     end else if (opcode == `OP_PUSH && rx_fifo_full && !iffull_flag) begin
@@ -370,14 +420,14 @@ module pio_cu #(
                     end else if (opcode == `OP_PULL && !tx_fifo_empty) begin
 //                    end else if (opcode == `OP_PULL && tx_fifo_empty) begin
                         // PULL can complete - TX FIFO has data
-                        // delay_counter
                         if (delay_value != '0) begin
                             next_state = S_DELAY;
                         end else begin
-//                            next_state = S_FETCH;
                             next_state = S_FET_DEC;
                         end
-                    end else if (opcode == `OP_PULL && tx_fifo_empty && !ifempty_flag) begin
+//                    end else if (opcode == `OP_PULL && tx_fifo_empty && !ifempty_flag) begin
+//                    end else if (fifo_blk_cond_met) begin
+                    end else if (opcode == `OP_PULL && tx_fifo_empty && block_flag) begin
                         // PULL blocked - stay in S_EXECUTE until FIFO has data
                         next_state = S_EXECUTE;															   
                     
@@ -386,7 +436,6 @@ module pio_cu #(
                         if (delay_value != '0) begin
                             next_state = S_DELAY;
                         end else begin
-//                            next_state = S_FETCH;
                             next_state = S_FET_DEC;
                         end
                     end
@@ -398,7 +447,6 @@ module pio_cu #(
                     if (delay_value != '0) begin
                         next_state = S_DELAY;
                     end else begin
-//                        next_state = S_FETCH;
                         next_state = S_FET_DEC;
                     end
                 end
@@ -407,7 +455,6 @@ module pio_cu #(
             
             S_DELAY: begin
                 if (delay_counter == 0) begin
-//                    next_state = S_FETCH;
                     next_state = S_FET_DEC;
                 end
             end
@@ -447,6 +494,9 @@ module pio_cu #(
         rx_fifo_write = 1'b0;
         irq_clear = '0;
         isr_counter_reset = 1'b0;
+        irq_set = '0;
+        computed_irq_index = '0;
+        irq_waiting = 1'b0;
 	    // MOV defaults (NEW - ADD THESE LINES)
         mov_write_en = 1'b0;
         mov_dest_sel = `MOV_DEST_X;
@@ -455,8 +505,6 @@ module pio_cu #(
 
         
         case (current_state)
-//            S_FETCH: begin end
-            
             S_EXECUTE: begin
                 casez (opcode)
                     `OP_JMP: begin
@@ -610,9 +658,103 @@ module pio_cu #(
                             pc_write_en = 1'b1;
                             pc_src_sel = `PC_SRC_PLUS_ONE;
                         end
-                    end                   
+                    end 
+                        
+                    `OP_IRQ: begin
+//                        logic [2:0] computed_irq_index;
+    
+                        // Enable IRQ operation
+                        irq_operation_en = 1'b1;
+                        irq_set_operation = !irq_clear_flag;  // 1=set, 0=clear
+                        irq_wait_for_clear = irq_wait_flag;
+    
+                        // Compute the actual IRQ index
+                        if (irq_index_field[4]) begin
+                            // Relative IRQ: add state machine ID
+                            computed_irq_index = (irq_index_field[2:0] + state_machine_id) % 4;
+                        end else begin
+                            // Absolute IRQ
+                            computed_irq_index = irq_index_field[2:0];
+                        end
+                        irq_target_index = {2'b00, computed_irq_index};
+    
+                        // Perform IRQ operation
+                        if (irq_clear_flag) begin
+                            // Clear the specified IRQ
+                            irq_clear[computed_irq_index] = 1'b1;
+                        end else begin
+                            // Set the specified IRQ  
+                            irq_set[computed_irq_index] = 1'b1;
+                        end
+    
+                        // Handle wait logic
+                        if (irq_wait_flag) begin
+                            // If wait flag is set, check if we need to wait
+                            if (irq_clear_flag) begin
+                                // IRQ CLEAR with WAIT: wait until IRQ is actually cleared by system
+                                // This is unusual but supported
+                                irq_waiting = irq_flags[computed_irq_index];
+                            end else begin
+                                // IRQ SET with WAIT: wait until IRQ is cleared by system
+                                irq_waiting = irq_flags[computed_irq_index];
+                            end
+        
+                            if (!irq_waiting) begin
+                                // Condition met, advance PC
+                                pc_write_en = 1'b1;
+                                pc_src_sel = `PC_SRC_PLUS_ONE;
+                            end
+                            // If waiting, PC doesn't advance (handled by FSM)
+                        end else begin
+                            // No wait, always advance PC
+                            pc_write_en = 1'b1;
+                            pc_src_sel = `PC_SRC_PLUS_ONE;
+                        end
+                    end  
+                                      
+                    `OP_SET: begin
+                        // Enable SET operation
+                        set_write_en = 1'b1;
+                        set_dest_sel = set_dest;
+                        set_data_value = set_data;
+    
+                        // Handle different destinations
+                        case (set_dest)
+                            `SET_DEST_PINS: begin // 3'b000
+                                // Set output pins - use GPIO write signals
+                                gpio_write_en = 1'b1;
+                                gpio_src_sel = `GPIO_SRC_IMMEDIATE;
+                            end
+        
+                            `SET_DEST_X: begin // 3'b001
+                                // Set X register
+                                x_reg_write_en = 1'b1;
+                                x_reg_src_sel = `REG_SRC_IMMEDIATE;
+                            end
+        
+                            `SET_DEST_Y: begin // 3'b010
+                                // Set Y register
+                                y_reg_write_en = 1'b1;
+                                y_reg_src_sel = `REG_SRC_IMMEDIATE;
+                            end
+        
+                            `SET_DEST_PINDIRS: begin // 3'b100
+                                // Set pin directions
+                                gpio_dir_write_en = 1'b1;
+                                gpio_src_sel = `GPIO_SRC_IMMEDIATE;
+                            end
+        
+                            default: begin
+                                // Invalid destination - treat as NOP
+                                set_write_en = 1'b0;
+                            end
+                        endcase
+    
+                        // Always advance PC
+                        pc_write_en = 1'b1;
+                        pc_src_sel = `PC_SRC_PLUS_ONE;
+                    end
 
-					
                     // Add other instruction implementations
                 endcase
             end
