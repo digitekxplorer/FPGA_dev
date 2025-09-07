@@ -15,11 +15,16 @@
 // Dependencies: pio_defs.svh
 // 
 // Revision:
+// Revision 1.2 - Instruction set complete: JMP, WAIT, IN, OUT, PUSH, PULL, MOV, SET, IRQ
+// Revision 1.1 - Implemented instructions: JMP, WAIT, IN, OUT, PUSH, PULL, MOV, SET
 // Revision 1.0 - Implemented instructions: JMP, WAIT, IN, OUT, PUSH, PULL, MOV
 // Revision 0.01 - File Created
 // Additional Comments:
 // 
+// TODO:
+// 1) Add delay/side effects to SET instruction
 //////////////////////////////////////////////////////////////////////////////////
+
 
 
 //================================================================
@@ -56,6 +61,10 @@ module pio_tl #(
     input  logic [REG_WIDTH-1:0]  tx_fifo_data,
     input  logic                  tx_fifo_empty,
     output logic                  tx_fifo_read,
+    
+    input  logic [REG_WIDTH-1:0]  tx_fifo_wr_data,
+    input  logic                  tx_fifo_wren,
+    
     output logic [REG_WIDTH-1:0]  rx_fifo_data,
     output logic                  rx_fifo_write,
     input  logic                  rx_fifo_full,
@@ -63,6 +72,7 @@ module pio_tl #(
     // IRQ interface
     input  logic [7:0]            irq_flags_in,
     output logic [7:0]            irq_flags_clear,
+    output logic [7:0]            irq_flags_set,    // IRQ set requests
     
     // IN
     input logic [4:0] shiftctrl_in_count,
@@ -126,6 +136,21 @@ module pio_tl #(
     logic [2:0]  cu_mov_dest_sel;
     logic [2:0]  cu_mov_src_sel;
     logic [1:0]  cu_mov_op_sel;
+    // SET control signals from control unit to datapath
+    logic        cu_set_write_en;
+    logic [2:0]  cu_set_dest_sel;    // 3 bits for destination
+    logic [4:0]  cu_set_data_value;
+    // IRQ control signals from control unit
+    logic        cu_irq_operation_en;
+    logic        cu_irq_set_operation;
+    logic        cu_irq_wait_for_clear;
+    logic [4:0]  cu_irq_target_index;
+//    logic [7:0]  cu_irq_set;          // IRQ set outputs
+
+    // TX Fifo
+    logic tx_fifo_full;
+    logic tx_fifo_mt;
+    logic [31:0] tx_fifo_datout;
     
     // Instruction memory interface
     logic [15:0] instruction_data;
@@ -178,7 +203,8 @@ module pio_tl #(
         // External status inputs
         .gpio_state(gpio_in),
         .irq_flags(irq_flags_in),
-        .tx_fifo_empty(tx_fifo_empty),
+//        .tx_fifo_empty(tx_fifo_empty),                 // ab: from testbench
+        .tx_fifo_empty(tx_fifo_mt),                      // ab: from TX Fifo
         .rx_fifo_full(rx_fifo_full),
         
         // Configuration inputs
@@ -221,7 +247,17 @@ module pio_tl #(
         .mov_dest_sel(cu_mov_dest_sel),
         .mov_src_sel(cu_mov_src_sel),
         .mov_op_sel(cu_mov_op_sel),
-		
+		// SET control outputs (ADD THESE)
+        .set_write_en(cu_set_write_en),
+        .set_dest_sel(cu_set_dest_sel),
+        .set_data_value(cu_set_data_value),
+        // IRQ control outputs (ADD THESE)
+        .irq_operation_en(cu_irq_operation_en),
+        .irq_set_operation(cu_irq_set_operation),
+        .irq_wait_for_clear(cu_irq_wait_for_clear),
+        .irq_target_index(cu_irq_target_index),
+        .irq_set(irq_flags_set),                     // IRQ output
+        
         .tx_fifo_read(tx_fifo_read),
         .rx_fifo_write(rx_fifo_write),
         .irq_clear(irq_flags_clear),
@@ -232,6 +268,10 @@ module pio_tl #(
         .debug_stalled()
     );
     assign debug_pc = pc_current;
+    
+    // Connect to top level outputs:
+//    assign irq_flags_set = cu_irq_set;
+    
     //================================================================
     // Datapath Instantiation
     //================================================================
@@ -272,13 +312,20 @@ module pio_tl #(
         .mov_dest_sel(cu_mov_dest_sel),
         .mov_src_sel(cu_mov_src_sel),
         .mov_op_sel(cu_mov_op_sel),
-        .tx_fifo_empty(tx_fifo_empty),
+        // SET control outputs (ADD THESE)
+        .set_write_en(cu_set_write_en),
+        .set_dest_sel(cu_set_dest_sel),
+        .set_data_value(cu_set_data_value),
+        
+//        .tx_fifo_empty(tx_fifo_empty),                 // ab: from testbench
+        .tx_fifo_empty(tx_fifo_mt),                      // ab: from TX Fifo
         .rx_fifo_full(rx_fifo_full),
         
         // Data inputs
         .pc_immediate(instruction_data[12:8]), // Address field for JMP
         .data_immediate({27'b0, instruction_data[4:0]}), // Simple immediate data
-        .tx_fifo_data(tx_fifo_data),
+//        .tx_fifo_data(tx_fifo_data),                   // ab: from testbench
+        .tx_fifo_data(tx_fifo_datout),                   // ab: from TX Fifo
         .gpio_in(gpio_in),
         .mapped_pins(gpio_in), // TODO: Apply proper pin mapping logic
         
@@ -305,6 +352,33 @@ module pio_tl #(
         .gpio_dir(gpio_dir),
         .rx_fifo_data(rx_fifo_data),
         .rx_fifo_write(rx_fifo_write)
+    );
+    
+
+//    // FIFO interfaces
+//    input  logic [REG_WIDTH-1:0]  tx_fifo_data,
+//    input  logic                  tx_fifo_empty,
+//    output logic                  tx_fifo_read,
+
+//    logic tx_fifo_full;
+//    logic tx_fifo_mt;
+//    logic [31:0] tx_fifo_datout;
+
+//    logic [REG_WIDTH-1:0] rx_fifo_data;
+//    logic                 rx_fifo_write;
+//    logic                 rx_fifo_full;
+    
+    
+    // TX FIFO
+    fifo_TxRx TX_Fifo (
+    .clk    (clk),      // input wire clk
+    .srst   (!rst_n),  // input wire srst
+    .din    (tx_fifo_wr_data),      // input wire [31 : 0] din
+    .wr_en  (tx_fifo_wren),  // input wire wr_en
+    .rd_en  (tx_fifo_read),  // input wire rd_en
+    .dout   (tx_fifo_datout),    // output wire [31 : 0] dout
+    .full   (tx_fifo_full),    // output wire full
+    .empty  (tx_fifo_mt)  // output wire empty
     );
     
     // Final debug output assignments
