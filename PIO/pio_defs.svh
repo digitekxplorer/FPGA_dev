@@ -17,6 +17,7 @@
 // Dependencies: None
 // 
 // Revision:
+// Revision 1.2 - Instruction set complete
 // Revision 1.0 - Initial code.
 //
 //////////////////////////////////////////////////////////////////////////////////
@@ -36,7 +37,8 @@
 `define OP_PUSH   4'b1000
 `define OP_PULL   4'b1001
 `define OP_MOV    4'b101?
-`define OP_IRQ    4'b110?
+//`define OP_IRQ    4'b110?
+`define OP_IRQ    4'b1100
 `define OP_SET    4'b111?
 
 // PC Source Select
@@ -116,5 +118,27 @@
 // Bit-reverse
 `define MOV_OP_REVERSE 2'b10
 // 2'b11 reserved
+
+// SET Destination Select (3 bits [7:5])
+// Set output pins
+`define SET_DEST_PINS    3'b000
+// Set X register
+`define SET_DEST_X       3'b001
+// Set Y register
+`define SET_DEST_Y       3'b010
+// 3'b011 reserved
+// Set pin directions
+`define SET_DEST_PINDIRS 3'b100
+// 3'b101, 3'b110, 3'b111 reserved
+
+// IRQ Operations
+// Set IRQ, don't wait
+`define IRQ_OP_SET_NOWAIT   2'b00
+// Set IRQ, wait for clear
+`define IRQ_OP_SET_WAIT     2'b01
+// Clear IRQ, don't wait
+`define IRQ_OP_CLEAR_NOWAIT 2'b10
+// Clear IRQ, wait for clear (unusual)
+`define IRQ_OP_CLEAR_WAIT   2'b11
 
 `endif // DEFINES_SVH
