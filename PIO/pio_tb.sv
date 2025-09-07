@@ -69,6 +69,7 @@ module pio_tb;
     // IRQ interface
     logic [7:0] irq_flags_in;
     logic [7:0] irq_flags_clear;
+    logic [7:0] irq_flags_set;    // IRQ set requests
     
     // IN configuration
     logic [4:0] shiftctrl_in_count;
@@ -101,6 +102,14 @@ module pio_tb;
     logic [31:0] expected_inverted;
     logic [31:0] expected_reversed;
     logic [31:0] test_text;
+    
+    logic [REG_WIDTH-1:0]  tx_fifo_wr_data;
+    logic                  tx_fifo_wren;
+    
+    // initialize to zero
+    initial begin
+        tx_fifo_wren = 0;
+    end
     						   
     //================================================================
     // DUT Instantiation
@@ -128,12 +137,16 @@ module pio_tb;
         .tx_fifo_data(tx_fifo_data),
         .tx_fifo_empty(tx_fifo_empty),
         .tx_fifo_read(tx_fifo_read),
+        .tx_fifo_wr_data(fifo_write_data),
+        .tx_fifo_wren(tx_fifo_wren),
+        
         .rx_fifo_data(rx_fifo_data),
         .rx_fifo_write(rx_fifo_write),
         .rx_fifo_full(rx_fifo_full),
         .irq_flags_in(irq_flags_in),
         .irq_flags_clear(irq_flags_clear),
-        
+        .irq_flags_set(irq_flags_set),
+                
         .shiftctrl_in_count(shiftctrl_in_count),
         .shiftctrl_in_shiftdir(shiftctrl_in_shiftdir),
         .shiftctrl_autopush_en(shiftctrl_autopush_en),
@@ -161,6 +174,7 @@ module pio_tb;
     //================================================================
     // Enhanced TX FIFO Simulation
     //================================================================
+    logic tx_fifo_wren;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             fifo_data_queue = {};
@@ -273,7 +287,7 @@ module pio_tb;
     // PULL instruction test programs
     task load_program_pull();
         $display("=== Loading PULL Test Program ===");
-        load_instruction(0, 16'b100_00000_1_0_0_00000); // PULL, no flags, no delay
+        load_instruction(0, 16'b100_00000_1_0_1_00000); // PULL, block=1, no delay
         load_instruction(1, 16'b100_00000_1_0_1_00000); // PULL, block=1, no delay  
         load_instruction(2, 16'b100_00000_1_1_0_00000); // PULL, ifempty=1, no delay
         load_instruction(3, 16'b100_00010_1_0_0_00000); // PULL, delay=2, no flags
@@ -340,13 +354,43 @@ task load_program_mov_corrected();
     $display("=== CORRECTED MOV Program Loading Complete ===");
 endtask
     
+    
+    task load_program_set_test();
+        $display("=== Loading SET Test Program ===");
+        // SET X, 15: [15:13]=111 [12:8]=00000 [7:5]=001 [4:0]=01111
+        load_instruction(0, 16'b111_00000_001_01111);  // SET X, 15
+        load_instruction(1, 16'b111_00000_010_00111);  // SET Y, 7
+        load_instruction(2, 16'b111_00000_000_11111);  // SET PINS, 31
+        load_instruction(3, 16'b111_00000_100_00001);  // SET PINDIRS, 1
+        load_instruction(4, 16'b000_00000_000_00000);  // JMP 0: Loop back
+        $display("=== SET Test Program Loading Complete ===");
+    endtask
+
+    task load_program_irq_test();
+        $display("=== Loading IRQ Test Program ===");
+        // IRQ SET 3: [15:13]=110 [12:8]=00000 [7]=0 [6]=0 [5]=0 [4:0]=00011
+        load_instruction(0, 16'b110_00000_0_0_0_00011);  // IRQ SET 3 (no wait) 
+        load_instruction(1, 16'b110_00000_0_1_0_00011);  // IRQ CLEAR 3 (no wait)
+        load_instruction(2, 16'b110_00000_0_0_1_00001);  // IRQ SET 1 (with wait)
+        // NOP after wait
+        load_instruction(3, 16'b101_00000_001_00_001);   // MOV X, X (NOP)
+        load_instruction(4, 16'b000_00000_000_00000);    // JMP 0: Loop back
+        $display("=== IRQ Test Program Loading Complete ===");
+    endtask
+    
+    
     // Task to add data to TX FIFO
     task fifo_write(input logic [REG_WIDTH-1:0] data);
+        // TODO: verify this
+        @(posedge clk); // ab, wait for clk rising edge
+        // TODO: verify this
         fifo_write_req = 1'b1;
+        tx_fifo_wren = 1'b1;      // for TX Fifo in pio_tl
         fifo_write_data = data;
         @(posedge clk); // Wait for the always_ff block to process
         // fifo_write_req will be auto-cleared by always_ff block
         $display("Added 0x%08X to TX FIFO", data);
+        tx_fifo_wren = 1'b0;
     endtask
     
     // Task to wait for N clock cycles
@@ -416,7 +460,7 @@ endtask
         shiftctrl_pull_thresh = 5'd8;
         pinctrl_in_base = 5'd0;
         pinctrl_out_base = 5'd0;
-        pinctrl_out_count = 5'd8;
+        pinctrl_out_count = 5'd8;    // used for pin_mask in pio_dp.sv
         state_machine_id = 2'b00;
 	    // OUT configuration
 //        shiftctrl_out_count = 5'd8;
@@ -850,6 +894,8 @@ end else begin
     $display("✗ MOV X, NULL: Expected 0x00000000, got 0x%08X", debug_x_reg);
 end
 
+// Let it run for a few cycles to verify no crashes
+wait_cycles(10);
 $display("MOV Phase 2 testing complete.");
 
 release u_dut.u_datapath.x_register;
@@ -862,6 +908,110 @@ release u_dut.u_datapath.osr_shift_counter;
 // ****************************************************
 // ****************************************************
 
+        // Test SET instruction
+//        test_set_instructions();
+        $display("\n=== TEST: SET Instructions ===");
+        // Reset and load program
+        rst_n = 1'b0;
+        wait_cycles(2);
+        load_program_set_test();
+        wait_cycles(2);
+        rst_n = 1'b1;
+        wait_cycles(1);
+        // Test 1: SET X, 15
+        wait_for_pc(5'd1, 10);
+        if (debug_x_reg == 32'd15) begin
+            $display("✓ SET X, 15: Successfully set X register to %0d", debug_x_reg);
+        end else begin
+            $display("✗ SET X, 15: Expected 15, got %0d", debug_x_reg);
+        end
+    
+        // Test 2: SET Y, 7
+        wait_for_pc(5'd2, 10);
+        if (debug_y_reg == 32'd7) begin
+            $display("✓ SET Y, 7: Successfully set Y register to %0d", debug_y_reg);
+        end else begin
+            $display("✗ SET Y, 7: Expected 7, got %0d", debug_y_reg);
+        end
+    
+        // Test 3: SET PINS, 31
+        wait_for_pc(5'd3, 10);
+        if (gpio_out[4:0] == 5'd31) begin
+            $display("✓ SET PINS, 31: Successfully set output pins to 0x%02X", gpio_out[4:0]);
+        end else begin
+            $display("✗ SET PINS, 31: Expected 0x1F, got 0x%02X", gpio_out[4:0]);
+        end
+    
+        // Test 4: SET PINDIRS, 1
+        wait_for_pc(5'd4, 10);
+        if (gpio_dir[0] == 1'b1) begin
+            $display("✓ SET PINDIRS, 1: Successfully set pin direction bit 0");
+        end else begin
+            $display("✗ SET PINDIRS, 1: Expected pin direction bit 0 set");
+        end
+    
+        // Let it run for a few cycles to verify no crashes
+        wait_cycles(10);
+        
+        $display("SET instruction testing complete.\n");
+        
+ 
+    // --- IRQ Test ---
+    $display("\n=== TEST: IRQ Instructions ===");
+    
+    // Reset and load program
+    rst_n = 1'b0;
+    wait_cycles(2);
+    load_program_irq_test();
+    wait_cycles(2);
+    rst_n = 1'b1;
+    wait_cycles(1);
+    
+    // Test 1: IRQ SET 3 (no wait)
+    wait_for_pc(5'd1, 10);
+    if (irq_flags_set[3]) begin
+        $display("✓ IRQ SET 3: Successfully set IRQ flag 3");
+    end else begin
+        $display("✗ IRQ SET 3: Failed to set IRQ flag 3");
+    end
+    
+    // Test 2: IRQ CLEAR 3 (no wait)  
+    wait_for_pc(5'd2, 10);
+    if (irq_flags_clear[3]) begin
+        $display("✓ IRQ CLEAR 3: Successfully cleared IRQ flag 3");
+    end else begin
+        $display("✗ IRQ CLEAR 3: Failed to clear IRQ flag 3");
+    end
+    
+    // Test 3: IRQ SET 1 WAIT - this should wait until system clears IRQ
+    $display("Testing IRQ SET 1 WAIT...");
+    wait_for_pc(5'd2, 10);  // Should reach this instruction
+    
+    // Simulate that IRQ 1 is still set (system hasn't cleared it)
+    irq_flags_in[1] = 1'b1;
+    wait_cycles(5);
+    
+    if (debug_waiting) begin
+        $display("✓ IRQ SET 1 WAIT: Correctly waiting for IRQ 1 to be cleared");
+    end else begin
+        $display("✗ IRQ SET 1 WAIT: Should be waiting for IRQ clear");
+    end
+    
+    // Simulate system clearing the IRQ
+    irq_flags_in[1] = 1'b0;
+    wait_cycles(3);
+    
+    if (!debug_waiting && debug_pc == 5'd3) begin
+        $display("✓ IRQ SET 1 WAIT: Successfully released wait and advanced PC");
+    end else begin
+        $display("✗ IRQ SET 1 WAIT: Failed to release wait properly");
+    end
+    
+    $display("IRQ instruction testing complete.\n");
+
+ 
+ 
+        
         
         // Test complete
         $display("\n=== All Tests Complete ===");
