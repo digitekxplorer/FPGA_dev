@@ -14,7 +14,6 @@
 // Dependencies: pio_defs.svh
 // 
 // Revision:
-// Revision 1.1 - Instruction set complete
 // Revision 0.01 - File Created
 // Additional Comments:
 // 
@@ -67,7 +66,7 @@ module pio_cu #(
     
     // Configuration Inputs
     input  logic [4:0] execctrl_jmp_pin,
-    input  logic [4:0] shiftctrl_pull_thresh,
+//    input  logic [4:0] shiftctrl_pull_thresh,
     input  logic [4:0] pinctrl_in_base,
     input  logic [1:0] state_machine_id,
     
@@ -77,6 +76,7 @@ module pio_cu #(
     // Control Outputs to Datapath
     output logic        pc_write_en,
     output logic [2:0]  pc_src_sel,
+    output logic        pc_hold,
     output logic        x_reg_write_en,
     output logic        y_reg_write_en,
     output logic [1:0]  x_reg_src_sel,
@@ -89,7 +89,8 @@ module pio_cu #(
     output logic        osr_shift_en,
     output logic [1:0]  osr_src_sel,
     output logic [4:0]  osr_shift_count,
-    output logic        osr_shift_dir,
+    output logic        osr_counter_reset,
+//    output logic        osr_shift_dir,
     
     // ISR Control
     output logic        isr_load_en,
@@ -118,7 +119,7 @@ module pio_cu #(
     // SET Control
     output logic        set_write_en,
     output logic [2:0]  set_dest_sel,   // 3 bits for destination
-    output logic [4:0]  set_data_value,
+//    output logic [4:0]  set_data_value,
     // IRQ Control
     output logic        irq_operation_en,
     output logic        irq_set_operation,
@@ -142,18 +143,19 @@ module pio_cu #(
     //================================================================
     // FSM State Definition
     //================================================================
-    typedef enum logic [3:0] {
-        S_RESET,
-        S_FET_DEC,
-        S_EXECUTE,
-        S_WAIT_CONDITION,
-        S_DELAY,
-        S_AUTOPULL,
-        S_AUTOPUSH,
-        S_STALLED
+    typedef enum logic [2:0] {
+        RESET,
+        SETUP,
+        EXECUTE,
+        WAIT_CONDITION,
+        DELAY
+//        AUTOPULL,
+//        AUTOPUSH,
+//        STALLED
     } pio_state_t;
     
     pio_state_t current_state, next_state;
+   
     
     // Instruction decode
     logic [3:0]  opcode;
@@ -213,6 +215,18 @@ module pio_cu #(
     logic        autopush_needed;
     logic [2:0]  computed_irq_index;
     
+//    logic        hold_pc;
+    
+    assign pc_hold = current_state == DELAY;
+//    always_comb begin
+//        if (next_state == DELAY) begin
+        
+//        end else begin
+        
+//        end
+        
+//    end
+    
     //================================================================
     // Instruction Decode
     //================================================================
@@ -225,7 +239,7 @@ module pio_cu #(
         // JMP instruction fields
         jmp_cond = instruction_data[7:5];
         // jump address not used in this module, used in datapath
-//        jmp_addr = instruction_data[12:8]; // For JMP
+//        jmp_addr = instruction_data[4:0]; // For JMP
         
         // WAIT instruction fields
         wait_polarity = instruction_data[7];
@@ -352,23 +366,23 @@ module pio_cu #(
     //================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            current_state <= S_RESET;
+            current_state <= RESET;
             delay_counter <= '0;
             waiting <= 1'b0;
         end else begin
             current_state <= next_state;
             
             // Delay counter management
-            if (current_state == S_DELAY) begin
+            if (current_state == DELAY) begin
                 if (delay_counter > 0) begin
                     delay_counter <= delay_counter - 1'b1;
                 end
-            end else if (next_state == S_DELAY) begin
+            end else if (next_state == DELAY) begin
                 delay_counter <= delay_value;
             end
             
             // Wait state management
-            if (current_state == S_WAIT_CONDITION) begin
+            if (current_state == WAIT_CONDITION) begin
                 waiting <= !wait_condition_met;
             end else begin
                 waiting <= 1'b0;
@@ -376,90 +390,93 @@ module pio_cu #(
         end
     end
     
-    // Next state logic
-    logic fifo_blk_cond_met;
-    assign fifo_blk_cond_met = opcode == `OP_PULL && tx_fifo_empty && block_flag;
-    
     
     always_comb begin
         next_state = current_state;
         
         case (current_state)
-            S_RESET: next_state = S_FET_DEC;
+            RESET: next_state = SETUP;
+            
+            SETUP: next_state = EXECUTE;
             
             
-            S_FET_DEC: begin
-                casez (opcode)
-                    `OP_JMP:  next_state = S_EXECUTE;
-                    `OP_WAIT: next_state = S_WAIT_CONDITION;
-                    `OP_OUT:  next_state = S_EXECUTE;
-                    `OP_IN:   next_state = S_EXECUTE;
-                    `OP_PUSH: next_state = S_EXECUTE;
-                    `OP_PULL: next_state = S_EXECUTE;
-                    `OP_MOV:  next_state = S_EXECUTE;        // MOV
-                    `OP_IRQ:  next_state = (irq_wait_flag) ? S_WAIT_CONDITION : S_EXECUTE;
-                    `OP_SET:  next_state = S_EXECUTE;        // SET																	
-                    // Add other instructions
-                    default: next_state = S_RESET; // NOP
-                endcase
-            end
+//            FETCH: begin
+//                casez (opcode)
+//                    `OP_JMP:  next_state = EXECUTE;
+//                    `OP_WAIT: next_state = WAIT_CONDITION;
+//                    `OP_OUT:  next_state = EXECUTE;
+//                    `OP_IN:   next_state = EXECUTE;
+//                    `OP_PUSH: next_state = EXECUTE;
+//                    `OP_PULL: next_state = EXECUTE;
+//                    `OP_MOV:  next_state = EXECUTE;        // MOV
+//                    `OP_IRQ:  next_state = (irq_wait_flag) ? WAIT_CONDITION : EXECUTE;
+//                    `OP_SET:  next_state = EXECUTE;        // SET																	
+//                    // Add other instructions
+//                    default: next_state = RESET; // NOP
+//                endcase
+//            end
             
-            S_EXECUTE: begin
-                    if (opcode == `OP_PUSH && !rx_fifo_full) begin
+            EXECUTE: begin
+            
+                    if (opcode == `OP_WAIT) begin
+                        next_state = WAIT_CONDITION;
+                    end else if (opcode == `OP_IRQ) begin
+                        next_state = (irq_wait_flag) ? WAIT_CONDITION : EXECUTE;
+//                    if (opcode == `OP_PUSH && !rx_fifo_full) begin
+                    end else if (opcode == `OP_PUSH && !rx_fifo_full) begin
                     // PUSH can complete
                         if (delay_value != '0) begin
-                            next_state = S_DELAY;
+                            next_state = DELAY;
                         end else begin
-                            next_state = S_FET_DEC;
+                            next_state = EXECUTE;
                         end
                     end else if (opcode == `OP_PUSH && rx_fifo_full && !iffull_flag) begin
-                        // PUSH blocked - stay in S_EXECUTE until FIFO has space
-                        next_state = S_EXECUTE;
-
-// TODO: Verify this change                        
+                        // PUSH blocked - stay in EXECUTE until FIFO has space
+                        next_state = EXECUTE;
+                        
                     end else if (opcode == `OP_PULL && !tx_fifo_empty) begin
-//                    end else if (opcode == `OP_PULL && tx_fifo_empty) begin
                         // PULL can complete - TX FIFO has data
                         if (delay_value != '0) begin
-                            next_state = S_DELAY;
+                            next_state = DELAY;
                         end else begin
-                            next_state = S_FET_DEC;
+                            next_state = EXECUTE;
                         end
 //                    end else if (opcode == `OP_PULL && tx_fifo_empty && !ifempty_flag) begin
-//                    end else if (fifo_blk_cond_met) begin
                     end else if (opcode == `OP_PULL && tx_fifo_empty && block_flag) begin
-                        // PULL blocked - stay in S_EXECUTE until FIFO has data
-                        next_state = S_EXECUTE;															   
+                        // PULL blocked - stay in EXECUTE until FIFO has data
+                        next_state = EXECUTE;															   
                     
                     end else begin
                         // Normal instruction completion
+                        // JMP, IN, OUT, MOV, SET
                         if (delay_value != '0) begin
-                            next_state = S_DELAY;
+                            next_state = DELAY;
                         end else begin
-                            next_state = S_FET_DEC;
+                            next_state = EXECUTE;
                         end
                     end
             end
 
             
-            S_WAIT_CONDITION: begin
+            WAIT_CONDITION: begin
                 if (wait_condition_met) begin
                     if (delay_value != '0) begin
-                        next_state = S_DELAY;
+                        next_state = DELAY;
                     end else begin
-                        next_state = S_FET_DEC;
+                        next_state = EXECUTE;
                     end
                 end
                 // Stay in wait state if condition not met
             end
             
-            S_DELAY: begin
-                if (delay_counter == 0) begin
-                    next_state = S_FET_DEC;
+            DELAY: begin
+//                if (delay_counter == 0) begin
+                if (delay_counter == 5'b00001) begin   // early done condition
+                    next_state = EXECUTE;
                 end
             end
             
-            default: next_state = S_RESET;
+            default: next_state = RESET;
         endcase
     end
     
@@ -481,7 +498,7 @@ module pio_cu #(
         osr_shift_en = 1'b0;
         osr_src_sel = `OSR_SRC_TX_FIFO;
         osr_shift_count = bit_count;
-        osr_shift_dir = 1'b1; // Default right shift
+//        osr_shift_dir = 1'b1; // Default right shift
         isr_load_en = 1'b0;
         isr_shift_en = 1'b0;
         isr_src_sel = `ISR_SRC_GPIO;
@@ -494,6 +511,7 @@ module pio_cu #(
         rx_fifo_write = 1'b0;
         irq_clear = '0;
         isr_counter_reset = 1'b0;
+        osr_counter_reset = 1'b0;
         irq_set = '0;
         computed_irq_index = '0;
         irq_waiting = 1'b0;
@@ -505,7 +523,7 @@ module pio_cu #(
 
         
         case (current_state)
-            S_EXECUTE: begin
+            EXECUTE: begin
                 casez (opcode)
                     `OP_JMP: begin
                         if (jmp_condition_met) begin
@@ -555,6 +573,12 @@ module pio_cu #(
                                 pc_write_en = 1'b1;
                                 pc_src_sel = `PC_SRC_OSR;
                             end
+                            3'b110: begin // ISR
+                                isr_load_en = 1'b1;
+                                isr_src_sel = `ISR_SRC_OSR;
+                                pc_write_en = 1'b1;
+                                pc_src_sel = `PC_SRC_OSR;
+                            end
                             // Add other destinations
                             
                             default: begin
@@ -568,9 +592,8 @@ module pio_cu #(
                     `OP_IN: begin
                         // Enable ISR shift operation
                         isr_shift_en = 1'b1;
-//                        isr_load_en = 1'b1;        // TODO: ab check this
-                        // Enable load for all sources except when source is ISR itself (shift-only)
-                        isr_load_en =(in_source != 3'b110); // Not ISR_SRC_ISR
+                        // Enable load for all sources except when source is ISR itself (shift-only)???
+                        isr_load_en =(in_source == 3'b110); // ISR = ISR; nop
                         
                         // Use bit count from instruction, or default from config
                         isr_shift_count = (bit_count == 5'b0) ? shiftctrl_in_count : bit_count;
@@ -643,8 +666,8 @@ module pio_cu #(
                 
                             // For basic implementation, just treat as NOP and advance PC
                             mov_write_en = 1'b0;  // Don't write to normal destinations
-                            pc_write_en = 1'b1;
-                            pc_src_sel = `PC_SRC_PLUS_ONE;
+//                            pc_write_en = 1'b1;
+//                            pc_src_sel = `PC_SRC_PLUS_ONE;
                 
                             // Note: Full EXEC would modify instruction flow
                         end else begin
@@ -655,9 +678,12 @@ module pio_cu #(
                             mov_op_sel = mov_op;           // Set operation
                 
                             // Always advance PC for normal MOV instructions
-                            pc_write_en = 1'b1;
-                            pc_src_sel = `PC_SRC_PLUS_ONE;
+//                            pc_write_en = 1'b1;
+//                            pc_src_sel = `PC_SRC_PLUS_ONE;
                         end
+                        // Always advance PC
+                        pc_write_en = 1'b1;
+                        pc_src_sel = `PC_SRC_PLUS_ONE;
                     end 
                         
                     `OP_IRQ: begin
@@ -716,7 +742,7 @@ module pio_cu #(
                         // Enable SET operation
                         set_write_en = 1'b1;
                         set_dest_sel = set_dest;
-                        set_data_value = set_data;
+//                        set_data_value = set_data;
     
                         // Handle different destinations
                         case (set_dest)
@@ -759,7 +785,7 @@ module pio_cu #(
                 endcase
             end
             
-            S_WAIT_CONDITION: begin
+            WAIT_CONDITION: begin
                 if (wait_condition_met) begin
                     // Handle IRQ clearing for WAIT IRQ with polarity=1
                     if (opcode == `OP_WAIT && wait_source == 2'b10 && wait_polarity) begin
@@ -781,7 +807,7 @@ module pio_cu #(
 // ***************
 // Verify this condition
 // ***************            
-            S_DELAY: begin
+            DELAY: begin
                 if (opcode == `OP_PULL && delay_counter == 0) begin
                     // Advance PC
                     pc_write_en = 1'b1;
@@ -812,7 +838,7 @@ module pio_cu #(
 //    assign debug_pc = pc_current;
 //    assign debug_pc = '0;
     assign debug_waiting = waiting;
-    assign debug_stalled = (current_state == S_DELAY) || (current_state == S_WAIT_CONDITION);
+    assign debug_stalled = (current_state == DELAY) || (current_state == WAIT_CONDITION);
 
 endmodule
 
