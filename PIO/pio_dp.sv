@@ -14,7 +14,6 @@
 // Dependencies: pio_defs.svh
 // 
 // Revision:
-// Revision 1.1 - Instruction set complete
 // Revision 0.01 - File Created
 // Additional Comments:
 // 
@@ -40,9 +39,12 @@ module pio_dp #(
     input  logic clk,
     input  logic rst_n,
     
+    // Instruction Memory Interface
+    input  logic [15:0] instruction_data,
     // Control Signals from Control Unit
     input  logic        pc_write_en,
     input  logic [2:0]  pc_src_sel,
+    input  logic        pc_hold,
     input  logic        x_reg_write_en,
     input  logic        y_reg_write_en,
     input  logic [1:0]  x_reg_src_sel,
@@ -56,7 +58,11 @@ module pio_dp #(
     input  logic [1:0]  osr_src_sel,
     input  logic [4:0]  osr_shift_count,
     input  logic        osr_shift_dir,
+    input  logic        osr_counter_reset,
 	input  logic [4:0]  shiftctrl_pull_thresh,
+	input  logic [4:0]  shiftctrl_push_thresh,
+	input  logic        autopush_enable,
+    input  logic        autopull_enable,
     
     // ISR Control  
     input  logic        isr_load_en,
@@ -79,14 +85,12 @@ module pio_dp #(
     // SET control signals
     input  logic        set_write_en,
     input  logic [2:0]  set_dest_sel,    // 3 bits for destination
-    input  logic [4:0]  set_data_value,
+	
     // FIFO status inputs for STATUS register (ADD IF MISSING)
     input  logic        tx_fifo_empty,
     input  logic        rx_fifo_full,
     
     // Data Inputs
-    input  logic [ADDR_WIDTH-1:0] pc_immediate,
-    input  logic [REG_WIDTH-1:0]  data_immediate,
     input  logic [REG_WIDTH-1:0]  tx_fifo_data,
     input  logic [GPIO_WIDTH-1:0] gpio_in,
     input  logic [GPIO_WIDTH-1:0] mapped_pins,
@@ -112,12 +116,13 @@ module pio_dp #(
     // External Outputs
     output logic [GPIO_WIDTH-1:0] gpio_out,
     output logic [GPIO_WIDTH-1:0] gpio_dir,
-    output logic [REG_WIDTH-1:0]  rx_fifo_data,
-    output logic                  rx_fifo_write
+    output logic [REG_WIDTH-1:0]  rx_fifo_data
+//    output logic                  rx_fifo_write
 );
 
     // Internal Registers
     logic [ADDR_WIDTH-1:0] pc_reg;
+    logic [ADDR_WIDTH-1:0] pc_reg_selected;
     logic [REG_WIDTH-1:0]  x_register;
     logic [REG_WIDTH-1:0]  y_register;
     logic [REG_WIDTH-1:0]  osr_register;
@@ -141,29 +146,80 @@ module pio_dp #(
     logic [REG_WIDTH-1:0] status_register;     // STATUS register value
     logic [REG_WIDTH-1:0] mov_write_data;      // Final data for destination
     
-    
-    // Zero-extend the 5-bit SET data to 32 bits
-    assign set_extended_data = {27'b0, set_data_value};
-    
+    logic [4:0]           jmp_addr;
+    logic [REG_WIDTH-1:0] set_data_extended;
+//    logic [REG_WIDTH-1:0] data_immediate;
+
+    logic [ADDR_WIDTH-1:0] pc_reg_sav;
+
+    //================================================================
+    // Instruction Decode
+    //================================================================
+    always_comb begin
+        // JMP instruction address field
+        jmp_addr = instruction_data[4:0]; // For JMP instruction
+        
+        // The next two assignments are the same??
+        // SET instruction data field
+        set_data_extended = {27'b0, instruction_data[4:0]};  // immediate set data
+        // Immediate data for X, Y, OSR, and GPIO registers
+//        data_immediate = {27'b0, instruction_data[4:0]};
+    end
     
     //================================================================
     // Program Counter
-    //================================================================
+    //================================================================  
+    // PC value selection
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            pc_reg <= '0;
+            pc_reg_selected <= '0;
         end else if (pc_write_en) begin
             case (pc_src_sel)
-                `PC_SRC_PLUS_ONE:  pc_reg <= pc_reg + 1'b1;
-                `PC_SRC_IMMEDIATE: pc_reg <= pc_immediate;
-                `PC_SRC_OSR:       pc_reg <= osr_register[ADDR_WIDTH-1:0];
-                `PC_SRC_CURRENT:   pc_reg <= pc_reg; // Hold current
-                default:           pc_reg <= pc_reg + 1'b1;
+                `PC_SRC_PLUS_ONE:  pc_reg_selected <= pc_reg_selected + 1'b1;
+				`PC_SRC_IMMEDIATE: pc_reg_selected <= jmp_addr;
+                `PC_SRC_OSR:       pc_reg_selected <= osr_register[ADDR_WIDTH-1:0];
+                `PC_SRC_CURRENT:   pc_reg_selected <= pc_reg_selected; // Hold current
+                default:           pc_reg_selected <= pc_reg_selected + 1'b1;
             endcase
         end
     end
     
+    // Save pc value used when cu FSM transitions to DELAY state
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            pc_reg_sav <= '0;;
+        end else begin
+            pc_reg_sav <= pc_reg;
+        end
+    end
+    
+    // If we are in the cu DELAY state, use the saved PC value.
+    always_comb begin
+        if (pc_hold) begin
+            pc_reg = pc_reg_sav;
+        end else begin
+            pc_reg = pc_reg_selected;
+        end
+    end 
+    
+    // Module output PC value
     assign pc_current = pc_reg;
+    
+//    always_ff @(posedge clk or negedge rst_n) begin
+//        if (!rst_n) begin
+//            pc_reg <= '0;
+//        end else if (pc_write_en) begin
+//            case (pc_src_sel)
+//                `PC_SRC_PLUS_ONE:  pc_reg <= pc_reg + 1'b1;
+//				`PC_SRC_IMMEDIATE: pc_reg <= jmp_addr;
+//                `PC_SRC_OSR:       pc_reg <= osr_register[ADDR_WIDTH-1:0];
+//                `PC_SRC_CURRENT:   pc_reg <= pc_reg; // Hold current
+//                default:           pc_reg <= pc_reg + 1'b1;
+//            endcase
+//        end
+//    end
+    
+    
     
     //================================================================
     // X and Y Scratch Registers
@@ -174,7 +230,7 @@ module pio_dp #(
         case (x_reg_src_sel)
             `REG_SRC_OSR:       x_reg_next = osr_shifted_data;
             `REG_SRC_ISR:       x_reg_next = isr_register;
-            `REG_SRC_IMMEDIATE: x_reg_next = data_immediate;
+            `REG_SRC_IMMEDIATE: x_reg_next = set_data_extended;
             `REG_SRC_GPIO:      x_reg_next = {24'b0, gpio_in[7:0]};
             default:            x_reg_next = x_register;
         endcase
@@ -185,7 +241,7 @@ module pio_dp #(
         case (y_reg_src_sel)
             `REG_SRC_OSR:       y_reg_next = osr_shifted_data;
             `REG_SRC_ISR:       y_reg_next = isr_register;
-            `REG_SRC_IMMEDIATE: y_reg_next = data_immediate;
+            `REG_SRC_IMMEDIATE: y_reg_next = set_data_extended;
             `REG_SRC_GPIO:      y_reg_next = {24'b0, gpio_in[7:0]};
             default:            y_reg_next = y_register;
         endcase
@@ -194,6 +250,7 @@ module pio_dp #(
 //================================================================
 // X Register (Modified to include MOV writes)
 //================================================================
+// X regisiter can be modified by 3 instructions: MOV, SET, and OUT
 always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         x_register <= '0;
@@ -205,22 +262,22 @@ always_ff @(posedge clk or negedge rst_n) begin
 //            $display("MOV to X: %08X", mov_write_data);
 //            $display("MOV to X Actual Value: %08X", x_register);
         end
-        // Normal X register writes
+        // Normal X register writes (SET, OUT instruction)
         else if (x_reg_write_en) begin
             case (x_reg_src_sel)
-                `REG_SRC_OSR: x_register <= osr_value;
+                `REG_SRC_OSR: x_register <= osr_value;  // osr_shifted_data???
                 `REG_SRC_ISR: x_register <= isr_value;
-//                `REG_SRC_IMMEDIATE: x_register <= data_immediate;
-                `REG_SRC_IMMEDIATE: begin
-                    // Check if this is a SET instruction writing to X
-                    if (set_write_en && set_dest_sel == `SET_DEST_X) begin
-                        x_register <= set_extended_data;
-                    end else begin
-                        x_register <= data_immediate;
-                    end               
-                end
+                `REG_SRC_IMMEDIATE: x_register <= set_data_extended;
+//                `REG_SRC_IMMEDIATE: begin
+//                    // Check if this is a SET instruction writing to X
+//                    if (set_write_en && set_dest_sel == `SET_DEST_X) begin
+//                        x_register <= set_data_extended;
+//                    end else begin
+//                        x_register <= data_immediate;
+//                    end               
+//                end
                 `REG_SRC_GPIO: x_register <= gpio_in;
-                default: x_register <= data_immediate;
+                default: x_register <= set_data_extended;
             endcase
         end
         // X register decrement
@@ -233,6 +290,7 @@ end
 //================================================================
 // Y Register (Modified to include MOV writes)
 //================================================================
+// Y regisiter can be modified by 3 instructions: MOV, SET, and OUT
 always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         y_register <= '0;
@@ -241,22 +299,22 @@ always_ff @(posedge clk or negedge rst_n) begin
         if (mov_write_en && mov_dest_sel == `MOV_DEST_Y) begin // 3'b010
             y_register <= mov_write_data;
         end
-        // Normal Y register writes
+        // Normal Y register writes (SET instruction)
         else if (y_reg_write_en) begin
             case (y_reg_src_sel)
                 `REG_SRC_OSR: y_register <= osr_value;
                 `REG_SRC_ISR: y_register <= isr_value;
-//                `REG_SRC_IMMEDIATE: y_register <= data_immediate;
-                `REG_SRC_IMMEDIATE: begin
-                    // Check if this is a SET instruction writing to Y
-                    if (set_write_en && set_dest_sel == `SET_DEST_Y) begin
-                        y_register <= set_extended_data;
-                    end else begin
-                        y_register <= data_immediate;
-                    end
-                end
+                `REG_SRC_IMMEDIATE: y_register <= set_data_extended;
+//                `REG_SRC_IMMEDIATE: begin
+//                    // Check if this is a SET instruction writing to Y
+//                    if (set_write_en && set_dest_sel == `SET_DEST_Y) begin
+//                        y_register <= set_data_extended;
+//                    end else begin
+//                        y_register <= data_immediate;
+//                    end
+//                end
                 `REG_SRC_GPIO: y_register <= gpio_in;
-                default: y_register <= data_immediate;
+                default: y_register <= set_data_extended;
             endcase
         end
         // Y register decrement
@@ -269,6 +327,7 @@ end
 //================================================================
 // Output Shift Register (OSR) - Fixed for synthesis
 //================================================================
+// OSR regisiter can be modified by 4 instructions: MOV, SET, PULL & OUT
 always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         osr_register <= '0;
@@ -285,7 +344,7 @@ always_ff @(posedge clk or negedge rst_n) begin
                 `OSR_SRC_TX_FIFO: osr_register <= tx_fifo_data;
                 `OSR_SRC_X_REG: osr_register <= x_register;
                 `OSR_SRC_Y_REG: osr_register <= y_register;
-                `OSR_SRC_IMMEDIATE: osr_register <= data_immediate;
+                `OSR_SRC_IMMEDIATE: osr_register <= set_data_extended;
                 default: osr_register <= tx_fifo_data;
             endcase
             osr_shift_counter <= '0;
@@ -304,25 +363,28 @@ always_ff @(posedge clk or negedge rst_n) begin
 end
     
     // Extract shifted data for output using masks instead of variable bit selects
+    logic [REG_WIDTH-1:0] osr_extract_mask;
     always_comb begin
-        logic [REG_WIDTH-1:0] extract_mask;
-        
         // Create mask for the number of bits to extract
         if (osr_shift_count == 5'd0) begin
-            extract_mask = 32'h0000_0000;
-        end else if (osr_shift_count >= 5'd32) begin
-            extract_mask = 32'hFFFF_FFFF;
+            osr_extract_mask = 32'h0000_0000;
+        end else if (osr_shift_count >= 5'd31) begin
+            osr_extract_mask = 32'hFFFF_FFFF;
         end else begin
-            extract_mask = (32'h0000_0001 << osr_shift_count) - 1;
+            // As an example assume shift count is 3
+            // 1) << 3 shifts this to 0...01000
+            // 2) Subtracting 1 results in 0...00111, which is a 
+            // mask for the 3 least significant bits
+            osr_extract_mask = (32'h0000_0001 << osr_shift_count) - 1;
         end
         
         case (osr_shift_dir)
             1'b0: begin // Right shift - output LSBs before they're shifted out
-                osr_shifted_data = osr_register & extract_mask;
+                osr_shifted_data = osr_register & osr_extract_mask;
             end
             1'b1: begin // Left shift - output MSBs before they're shifted out
-                if (osr_shift_count < 5'd32) begin
-                    osr_shifted_data = (osr_register >> (32 - osr_shift_count)) & extract_mask;
+                if (osr_shift_count < 5'd31) begin
+                    osr_shifted_data = (osr_register >> (32 - osr_shift_count)) & osr_extract_mask;
                 end else begin
                     osr_shifted_data = osr_register;
                 end
@@ -331,10 +393,16 @@ end
     end
     
     //================================================================
-    // Input Shift Register (ISR) - Fixed for source selection
+    // Input Shift Register (ISR)
     //================================================================ 
+    // ISR regisiter can be modified by 3 instructions: MOV, PUSH & IN
     // Source data selection for ISR shifting - THIS IS THE KEY FIX
     logic [REG_WIDTH-1:0] isr_shift_in_data;
+    logic [REG_WIDTH-1:0] isr_data_shifted;
+    logic [REG_WIDTH-1:0] isr_shifted;
+    logic [REG_WIDTH-1:0] isr_data_masked;
+    logic [REG_WIDTH-1:0] isr_shifted;
+    logic [REG_WIDTH-1:0] isr_data_mask;
     
     always_comb begin
         case (isr_src_sel)
@@ -347,6 +415,19 @@ end
         endcase
     end
     
+    // Setup data mask for ISR
+    // Create mask for source data
+    always_comb begin
+        if (isr_shift_en) begin
+            if (isr_shift_count > 5'd31) begin
+                isr_data_mask = 32'hFFFF_FFFF;
+            end else begin
+                isr_data_mask = (32'h0000_0001 << isr_shift_count) - 1;
+            end 
+        end 
+    end
+
+    // ISR Shifter
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             isr_register <= '0;
@@ -362,6 +443,7 @@ end
                 isr_shift_counter <= '0; // Reset counter on load
             end
             else if (isr_load_en) begin
+                // load into ISR without any shift
                 case (isr_src_sel)
                     `ISR_SRC_GPIO:  isr_register <= {24'b0, gpio_in[7:0]};
                     `ISR_SRC_X_REG: isr_register <= x_register;
@@ -377,39 +459,25 @@ end
                     case (isr_shift_dir)
                         1'b0: begin // Right shift - shift in selected data from left
                             // Use shift operators instead of variable bit selects
-                            logic [REG_WIDTH-1:0] data_shifted;
-                            logic [REG_WIDTH-1:0] isr_shifted;
-                            
                             // FIXED: Use selected source data instead of hardcoded gpio_in
-                            data_shifted = (REG_WIDTH'(isr_shift_in_data) << (REG_WIDTH - isr_shift_count));
+                            isr_data_shifted = (REG_WIDTH'(isr_shift_in_data) << (REG_WIDTH - isr_shift_count));
                             
                             // Shift existing ISR data right
                             isr_shifted = isr_register >> isr_shift_count;
                             
                             // Combine them
-                            isr_register <= data_shifted | isr_shifted;
+                            isr_register <= isr_data_shifted | isr_shifted;
                         end
                         1'b1: begin // Left shift - shift in selected data from right
                             // Use shift operators instead of variable bit selects
-                            logic [REG_WIDTH-1:0] data_masked;
-                            logic [REG_WIDTH-1:0] isr_shifted;
-                            logic [REG_WIDTH-1:0] data_mask;
-                            
-                            // Create mask for source data
-                            if (isr_shift_count >= 5'd32) begin
-                                data_mask = 32'hFFFF_FFFF;
-                            end else begin
-                                data_mask = (32'h0000_0001 << isr_shift_count) - 1;
-                            end
-                            
                             // Mask selected data
-                            data_masked = REG_WIDTH'(isr_shift_in_data) & data_mask;
+                            isr_data_masked = REG_WIDTH'(isr_shift_in_data) & isr_data_mask;
                             
                             // Shift existing ISR data left
                             isr_shifted = isr_register << isr_shift_count;
                             
                             // Combine them
-                            isr_register <= isr_shifted | data_masked;
+                            isr_register <= isr_shifted | isr_data_masked;
                         end
                     endcase
                     isr_shift_counter <= isr_shift_counter + isr_shift_count;
@@ -419,23 +487,78 @@ end
     end
     
     //================================================================
+    // ISR and OSR Shifters
+    //================================================================
+//    logic [31:0] isr_data;
+//    logic [31:0] osr_shift_out_data;
+//    logic [31:0] osr_data;            // same as osr_register (org input data)
+//    logic        autopush_flag;
+//    logic        autopull_flag;
+//    logic        shfters_en;
+//    logic [4:0]  osr_shift_counter_shft;
+//    logic [4:0]  isr_shift_counter_shft;
+    
+//    assign shfters_en = 1'b1;
+    
+    // Available Shift counts: 0-8, 16, 24, and 32.
+//    pio_shift_registers pio_shifters (
+//        .clk                 (clk),
+//        .rst_n               (rst_n),
+    
+//        // ISR (Input Shift Register) Interface
+//        .isr_shift_en        (isr_shift_en),
+//        .isr_shift_dir       (isr_shift_dir),        // 0=right, 1=left
+//        .isr_shift_count     (isr_shift_count),
+//        .isr_shift_in_data   (isr_shift_in_data),
+//        .isr_data            (isr_data),             // output
+//        .isr_load_en         (isr_load_en),
+//        .isr_load_data       (isr_register),         // ??
+    
+//        // OSR (Output Shift Register) Interface  
+//        .osr_shift_en        (osr_shift_en),
+//        .osr_shift_dir       (osr_shift_dir),     // 0=right, 1=left
+//        .osr_shift_count     (osr_shift_count),
+//        .osr_shift_out_data  (osr_shift_out_data),   // output
+//        .osr_data            (osr_data),             // output
+//        .osr_load_en         (osr_load_en),
+//        .osr_load_data       (osr_register),        // ??
+    
+//        // Shift counters for autopush/autopull
+//        .isr_shift_counter   (isr_shift_counter_shft),  // output
+//        .osr_shift_counter   (osr_shift_counter_shft),  // output
+//        .isr_counter_reset   (isr_counter_reset),
+//        .osr_counter_reset   (osr_counter_reset),
+    
+//        // Configuration
+//        .autopush_threshold  (shiftctrl_push_thresh), 
+//        .autopull_threshold  (shiftctrl_pull_thresh),
+//        .autopush_enable     (autopush_enable),
+//        .autopull_enable     (autopull_enable),
+    
+//        // Autopush/pull flags
+//        .autopush_flag       (autopush_flag),   // output
+//        .autopull_flag       (autopull_flag)    // output
+//    );  
+    
+    //================================================================
     // GPIO Output Registers
     //================================================================
+    // GPIO output regisiter can be modified by 3 instructions: MOV, SET, & OUT
     always_comb begin
         case (gpio_src_sel)
             `GPIO_SRC_OSR:       gpio_write_data = osr_shifted_data;
             `GPIO_SRC_X_REG:     gpio_write_data = x_register;
             `GPIO_SRC_Y_REG:     gpio_write_data = y_register;
-//            `GPIO_SRC_IMMEDIATE: gpio_write_data = data_immediate;
-            `GPIO_SRC_IMMEDIATE: begin
-                // Check if this is a SET instruction
-                if (set_write_en && (set_dest_sel == `SET_DEST_PINS || set_dest_sel == `SET_DEST_PINDIRS)) begin
-                    gpio_write_data = set_extended_data;
-                end else begin
-                    gpio_write_data = data_immediate;
-                end
-            end
-            default:             gpio_write_data = data_immediate;
+            `GPIO_SRC_IMMEDIATE: gpio_write_data = set_data_extended;
+//            `GPIO_SRC_IMMEDIATE: begin
+//                // Check if this is a SET instruction
+//                if (set_write_en && (set_dest_sel == `SET_DEST_PINS || set_dest_sel == `SET_DEST_PINDIRS)) begin
+//                    gpio_write_data = set_data_extended;
+//                end else begin
+//                    gpio_write_data = data_immediate;
+//                end
+//            end
+            default:             gpio_write_data = set_data_extended;
         endcase
     end
     
@@ -548,7 +671,7 @@ end
     assign y_is_zero = (y_register == '0);
     assign x_not_equal_y = (x_register != y_register);
     assign osr_below_threshold = (osr_shift_counter >= shiftctrl_pull_thresh);
-    assign isr_above_threshold = (isr_shift_counter >= 5'd24);         // Example threshold
+    assign isr_above_threshold = (isr_shift_counter >= shiftctrl_push_thresh);         // Example threshold
     
     //================================================================
     // Output Assignments
@@ -565,7 +688,7 @@ end
     
     // RX FIFO interface (for PUSH operations)
     assign rx_fifo_data = isr_register;
-    assign rx_fifo_write = 1'b0; // Controlled by control unit
+//    assign rx_fifo_write = 1'b0; // Controlled by control unit
 
 endmodule
 
