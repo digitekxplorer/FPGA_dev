@@ -23,28 +23,32 @@
 //================================================================
 
 `timescale 1ns / 1ps
+`include "pio_defs.svh"
 
 module pio_tb;
 
     // Parameters
-    parameter int CLK_PERIOD = 10; // 100MHz clock
-    parameter int ADDR_WIDTH = 5;
-    parameter int REG_WIDTH = 32;
-    parameter int GPIO_WIDTH = 32;
-    parameter int INSTR_MEM_DEPTH = 32;
+//    parameter int CLK_PERIOD = 10; // 100MHz clock
+//    parameter int INSTR_MEM_ADDR_WIDTH = 5;
+//    parameter int REG_WIDTH = 32;
+//    parameter int GPIO_WIDTH = 32;
+//    parameter int INSTR_MEM_DEPTH = 32;
     
     // Clock and Reset
     logic clk;
     logic rst_n;
     
     // DUT Signals
-    logic [GPIO_WIDTH-1:0] gpio_in;
-    logic [GPIO_WIDTH-1:0] gpio_out;
-    logic [GPIO_WIDTH-1:0] gpio_dir;
+    logic [`GPIO_WIDTH-1:0] gpio_in;
+    logic [`GPIO_WIDTH-1:0] gpio_out;
+    logic [`GPIO_WIDTH-1:0] gpio_dir;
     
     // Configuration
     logic [4:0] execctrl_jmp_pin;
     logic [4:0] shiftctrl_pull_thresh;
+    logic [4:0] shiftctrl_push_thresh;
+	logic       autopush_enable;
+    logic       autopull_enable;
     logic [4:0] pinctrl_in_base;
     logic [4:0] pinctrl_out_base;
     logic [4:0] pinctrl_out_count;
@@ -52,19 +56,24 @@ module pio_tb;
     
     // Instruction Memory Programming
     logic                  imem_write_en;
-    logic [ADDR_WIDTH-1:0] imem_write_addr;
+    logic [`INSTR_MEM_ADDR_WIDTH-1:0] imem_write_addr;
     logic [15:0]           imem_write_data;
     
     // FIFO interfaces
-    logic [REG_WIDTH-1:0] tx_fifo_data;
-    logic                 tx_fifo_empty;
-    logic                 tx_fifo_read;
-    logic [REG_WIDTH-1:0] rx_fifo_data;
-    logic                 rx_fifo_write;
-    logic                 rx_fifo_full;
+    logic [`REG_WIDTH-1:0] tx_fifo_data;
+//    logic                 tx_fifo_empty;
+//    logic                 tx_fifo_read;
+//    logic [REG_WIDTH-1:0] rx_fifo_data;
+//    logic                 rx_fifo_write;
+    logic                 rx_fifo_mt;
+//    logic                 rx_fifo_full;
+    
+    logic rx_fifo_rden;                     // output
+    logic [`REG_WIDTH-1:0] rx_fifo_datout;   // input
+    logic rx_fifo_full;                     // input
 	
-    logic                  fifo_write_req;
-    logic [REG_WIDTH-1:0]  fifo_write_data;
+//    logic                  fifo_write_req;
+    logic [`REG_WIDTH-1:0]  fifo_write_data;
     
     // IRQ interface
     logic [7:0] irq_flags_in;
@@ -76,24 +85,26 @@ module pio_tb;
     logic       shiftctrl_in_shiftdir;
     logic       shiftctrl_autopush_en;
     logic [4:0] shiftctrl_autopush_thresh;
+    // OUT
+    logic       shiftctrl_out_shiftdir;
     
     // PULL configuration (NEW)
     logic       shiftctrl_autopull_en;
     logic [4:0] shiftctrl_autopull_thresh;							   
     // Debug outputs
-    logic [ADDR_WIDTH-1:0] debug_pc;
-    logic [REG_WIDTH-1:0]  debug_x_reg;
-    logic [REG_WIDTH-1:0]  debug_y_reg;
-    logic [REG_WIDTH-1:0]  debug_osr;
+    logic [`INSTR_MEM_ADDR_WIDTH-1:0] debug_pc;
+    logic [`REG_WIDTH-1:0]  debug_x_reg;
+    logic [`REG_WIDTH-1:0]  debug_y_reg;
+    logic [`REG_WIDTH-1:0]  debug_osr;
     logic [4:0]            debug_osr_count;
     logic                  debug_waiting;
-    logic [REG_WIDTH-1:0]  debug_isr;
+    logic [`REG_WIDTH-1:0]  debug_isr;
     logic [4:0]            debug_isr_count;
     
     // TX FIFO simulation
-    logic [REG_WIDTH-1:0] fifo_data_queue [$];
+    logic [`REG_WIDTH-1:0] fifo_data_queue [$];
     
-    logic [REG_WIDTH-1:0] prev_osr;
+    logic [`REG_WIDTH-1:0] prev_osr;
     int autopull_count = 0;
     int start_time;
     int end_time;
@@ -103,8 +114,9 @@ module pio_tb;
     logic [31:0] expected_reversed;
     logic [31:0] test_text;
     
-    logic [REG_WIDTH-1:0]  tx_fifo_wr_data;
+    logic [`REG_WIDTH-1:0]  tx_fifo_wr_data;
     logic                  tx_fifo_wren;
+    logic                  tx_fifo_full;
     
     // initialize to zero
     initial begin
@@ -114,12 +126,14 @@ module pio_tb;
     //================================================================
     // DUT Instantiation
     //================================================================
-    pio_tl #(
-        .ADDR_WIDTH(ADDR_WIDTH),
-        .REG_WIDTH(REG_WIDTH),
-        .GPIO_WIDTH(GPIO_WIDTH),
-        .INSTR_MEM_DEPTH(INSTR_MEM_DEPTH)
-    ) u_dut (
+//    pio_tl #(
+//        .INSTR_MEM_ADDR_WIDTH(INSTR_MEM_ADDR_WIDTH),
+//        .REG_WIDTH(REG_WIDTH),
+//        .GPIO_WIDTH(GPIO_WIDTH),
+//        .INSTR_MEM_DEPTH(INSTR_MEM_DEPTH)
+//    ) u_dut (
+    
+    pio_tl u_dut (
         .clk(clk),
         .rst_n(rst_n),
         .gpio_in(gpio_in),
@@ -127,6 +141,9 @@ module pio_tb;
         .gpio_dir(gpio_dir),
         .execctrl_jmp_pin(execctrl_jmp_pin),
         .shiftctrl_pull_thresh(shiftctrl_pull_thresh),
+        .shiftctrl_push_thresh(shiftctrl_push_thresh),
+        .autopush_enable(autopush_enable),
+        .autopull_enable(autopull_enable),        
         .pinctrl_in_base(pinctrl_in_base),
         .pinctrl_out_base(pinctrl_out_base),
         .pinctrl_out_count(pinctrl_out_count),
@@ -134,15 +151,22 @@ module pio_tb;
         .imem_write_en(imem_write_en),
         .imem_write_addr(imem_write_addr),
         .imem_write_data(imem_write_data),
-        .tx_fifo_data(tx_fifo_data),
-        .tx_fifo_empty(tx_fifo_empty),
-        .tx_fifo_read(tx_fifo_read),
+//        .tx_fifo_data(tx_fifo_data),
+//        .tx_fifo_empty(tx_fifo_empty),
+//        .tx_fifo_read(tx_fifo_read),
         .tx_fifo_wr_data(fifo_write_data),
         .tx_fifo_wren(tx_fifo_wren),
+        .tx_fifo_full(tx_fifo_full),
         
-        .rx_fifo_data(rx_fifo_data),
-        .rx_fifo_write(rx_fifo_write),
-        .rx_fifo_full(rx_fifo_full),
+//        .rx_fifo_data(rx_fifo_data),
+//        .rx_fifo_write(rx_fifo_write),
+        .rx_fifo_mt(rx_fifo_mt),
+//        .rx_fifo_full(rx_fifo_full),
+        
+        .rx_fifo_rden(rx_fifo_rden),       // output
+        .rx_fifo_datout(rx_fifo_datout),   // input logic [REG_WIDTH-1:0]
+//        .rx_fifo_full(rx_fifo_full),       // input
+        
         .irq_flags_in(irq_flags_in),
         .irq_flags_clear(irq_flags_clear),
         .irq_flags_set(irq_flags_set),
@@ -152,7 +176,8 @@ module pio_tb;
         .shiftctrl_autopush_en(shiftctrl_autopush_en),
         .shiftctrl_autopush_thresh(shiftctrl_autopush_thresh),
         .shiftctrl_autopull_en(shiftctrl_autopull_en),
-        .shiftctrl_autopull_thresh(shiftctrl_autopull_thresh),													  
+        .shiftctrl_autopull_thresh(shiftctrl_autopull_thresh),
+        .shiftctrl_out_shiftdir(shiftctrl_out_shiftdir),													  
         .debug_pc(debug_pc),
         .debug_x_reg(debug_x_reg),
         .debug_y_reg(debug_y_reg),
@@ -168,49 +193,49 @@ module pio_tb;
     //================================================================
     initial begin
         clk = 0;
-        forever #(CLK_PERIOD/2) clk = ~clk;
+        forever #(`CLK_PERIOD/2) clk = ~clk;
     end
     
     //================================================================
     // Enhanced TX FIFO Simulation
     //================================================================
-    logic tx_fifo_wren;
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            fifo_data_queue = {};
-            tx_fifo_empty <= 1'b1;
-            tx_fifo_data <= '0;
-            fifo_write_req <= 1'b0; // Auto-clear write request															   
-        end else begin
-            // Handle FIFO write request
-            if (fifo_write_req) begin
-                fifo_data_queue.push_back(fifo_write_data);
-                fifo_write_req <= 1'b0; // Auto-clear
-            end
-            // Handle FIFO read
-            if (tx_fifo_read && !tx_fifo_empty) begin
-                if (fifo_data_queue.size() > 0) begin
-                    void'(fifo_data_queue.pop_front());
-                end
-            end
+//    logic tx_fifo_wren;
+//    always_ff @(posedge clk or negedge rst_n) begin
+//        if (!rst_n) begin
+//            fifo_data_queue = {};
+//            tx_fifo_empty <= 1'b1;
+//            tx_fifo_data <= '0;
+//            fifo_write_req <= 1'b0; // Auto-clear write request															   
+//        end else begin
+//            // Handle FIFO write request
+//            if (fifo_write_req) begin
+//                fifo_data_queue.push_back(fifo_write_data);
+//                fifo_write_req <= 1'b0; // Auto-clear
+//            end
+//            // Handle FIFO read
+//            if (tx_fifo_read && !tx_fifo_empty) begin
+//                if (fifo_data_queue.size() > 0) begin
+//                    void'(fifo_data_queue.pop_front());
+//                end
+//            end
             
-            // Update FIFO status
-            if (fifo_data_queue.size() > 0) begin
-                tx_fifo_data <= fifo_data_queue[0];
-                tx_fifo_empty <= 1'b0;
-            end else begin
-                tx_fifo_data <= '0;
-                tx_fifo_empty <= 1'b1;
-            end
-        end
-    end
+//            // Update FIFO status
+//            if (fifo_data_queue.size() > 0) begin
+//                tx_fifo_data <= fifo_data_queue[0];
+//                tx_fifo_empty <= 1'b0;
+//            end else begin
+//                tx_fifo_data <= '0;
+//                tx_fifo_empty <= 1'b1;
+//            end
+//        end
+//    end
     
     //================================================================
     // Helper Tasks
     //================================================================
     
     // Task to load a single instruction
-    task load_instruction(input logic [ADDR_WIDTH-1:0] addr, input logic [15:0] instr);
+    task load_instruction(input logic [`INSTR_MEM_ADDR_WIDTH-1:0] addr, input logic [15:0] instr);
         @(posedge clk);
         imem_write_en = 1'b1;
         imem_write_addr = addr;
@@ -226,20 +251,21 @@ module pio_tb;
         $display("=== Loading OUT Test Program ===");
         load_instruction(0, 16'b011_00000_000_00000);  // OUT PINS, 8 bits, no delay
         load_instruction(1, 16'b011_00001_001_00001);  // OUT X, default count, delay 1
-        load_instruction(2, 16'b011_00000_010_00000);  // OUT Y, default count, no delay
-        load_instruction(3, 16'b000_00000_000_00001);  // JMP 0, delay 1 (loop)
+        load_instruction(2, 16'b011_00011_010_00000);  // OUT Y, default count, delay 3
+        load_instruction(3, 16'b000_00001_000_00000);  // JMP 0, delay 1 (loop)
         $display("=== Program Loading Complete ===");
     endtask
     
     task load_program_jmp();
         $display("=== Loading JMP Test Program ===");
-        load_instruction(0, 16'b011_00000_001_00000);  // OUT X, default count
-        load_instruction(1, 16'b000_00010_001_00000);  // JMP 2 if !X
-        load_instruction(2, 16'b000_00100_010_00000);  // JMP 4 if X--
-        load_instruction(3, 16'b011_00000_001_00000);  // OUT X (should be skipped)
-        load_instruction(4, 16'b000_00110_001_00000);  // JMP 6 if !X
-        load_instruction(5, 16'b011_00000_001_00000);  // OUT X (should be skipped)
-        load_instruction(6, 16'b000_00000_000_00000);  // JMP 0 (loop)
+        load_instruction(0, 16'b111_00000_001_00001);  // SET X, 1
+        load_instruction(1, 16'b011_00000_000_00001);  // OUT Pins, 1 count
+        load_instruction(2, 16'b000_00000_001_00011);  // JMP 3 if !X
+        load_instruction(3, 16'b000_00000_010_00101);  // JMP 5 if X--
+        load_instruction(4, 16'b011_00000_001_00000);  // OUT X
+        load_instruction(5, 16'b000_00000_001_00111);  // JMP 7 if !X
+        load_instruction(6, 16'b011_00000_001_00000);  // OUT X (should be skipped)
+        load_instruction(7, 16'b000_00011_000_00000);  // JMP 0, delay 3
         $display("=== Program Loading Complete ===");
     endtask
     
@@ -276,11 +302,12 @@ module pio_tb;
     
     task load_program_in();
         $display("=== Loading IN Test Program ===");
-        load_instruction(0, 16'h4000); // IN PINS, default count, no delay
-        load_instruction(1, 16'h4020); // IN X, default count, no delay
-        load_instruction(2, 16'h4040); // IN Y, default count, no delay
-        load_instruction(3, 16'h4060); // IN NULL, default count, no delay
-        load_instruction(4, 16'h0000); // JMP 0 (loop)
+//        load_instruction(0, 16'h4000); // IN PINS, default count, no delay
+//        load_instruction(0, 16'b010_00000_000_00000); // IN PINS, default count, no delay
+        load_instruction(1, 16'b010_00000_001_00100); // IN X, 4 count, no delay
+//        load_instruction(2, 16'b010_00000_010_00010); // IN Y, 2 count, no delay
+//        load_instruction(3, 16'b010_00000_011_00000); // IN NULL, default count, no delay
+        load_instruction(4, 16'b000_00000_000_00000); // JMP 0 (loop)
         $display("=== Program Loading Complete ===");
     endtask
     
@@ -319,7 +346,11 @@ module pio_tb;
         $display("=== Loading Basic MOV Test Program ===");
         // [15:13]=101 [12:8]=00000 [7:5]=001 [4:3]=00 [2:0]=010
         load_instruction(0, 16'b101_00000_001_00_010);  // MOV X, Y: Copy Y register to X register
-        load_instruction(1, 16'b101_00000_010_00_011);  // MOV Y, NULL: Load zeros into Y register
+        load_instruction(1, 16'b101_00000_001_00_011);  // MOV X, NULL: Load zeros into X register
+
+//        load_instruction(0, 16'b101_00000_010_00_001);  // MOV Y, X: Copy X register to Y register
+//        load_instruction(1, 16'b101_00000_010_00_011);  // MOV Y, NULL: Load zeros into Y register
+        
         load_instruction(2, 16'b000_00000_0_00_00000);   // JMP 0: Loop back
         $display("=== Basic MOV Program Loading Complete ===");
     endtask
@@ -380,11 +411,11 @@ endtask
     
     
     // Task to add data to TX FIFO
-    task fifo_write(input logic [REG_WIDTH-1:0] data);
+    task fifo_write(input logic [`REG_WIDTH-1:0] data);
         // TODO: verify this
         @(posedge clk); // ab, wait for clk rising edge
         // TODO: verify this
-        fifo_write_req = 1'b1;
+//        fifo_write_req = 1'b1;
         tx_fifo_wren = 1'b1;      // for TX Fifo in pio_tl
         fifo_write_data = data;
         @(posedge clk); // Wait for the always_ff block to process
@@ -399,7 +430,7 @@ endtask
     endtask
     
     // Task to wait until PC reaches specific address
-    task wait_for_pc(input logic [ADDR_WIDTH-1:0] target_pc, input int timeout_cycles = 100);
+    task wait_for_pc(input logic [`INSTR_MEM_ADDR_WIDTH-1:0] target_pc, input int timeout_cycles = 100);
         int cycle_count = 0;
         while (debug_pc != target_pc && cycle_count < timeout_cycles) begin
             @(posedge clk);
@@ -415,7 +446,7 @@ endtask
 
     // PULL test helper functions
     task verify_pull_result(
-        input logic [REG_WIDTH-1:0] expected_osr,
+        input logic [`REG_WIDTH-1:0] expected_osr,
         input string test_name
     );
         if (debug_osr == expected_osr) begin
@@ -426,7 +457,7 @@ endtask
     endtask
 
     task verify_pull_blocked(input string test_name);
-        logic [ADDR_WIDTH-1:0] initial_pc = debug_pc;
+        logic [`INSTR_MEM_ADDR_WIDTH-1:0] initial_pc = debug_pc;
         wait_cycles(5);
         if (debug_pc == initial_pc) begin
             $display("✓ %s: PULL correctly blocked (PC=%0d)", test_name, debug_pc);
@@ -438,16 +469,51 @@ endtask
 
     task wait_for_fifo_read(input int timeout_cycles = 20);
         int cycle_count = 0;
-        while (!tx_fifo_read && cycle_count < timeout_cycles) begin
+        while (!u_dut.tx_fifo_read && cycle_count < timeout_cycles) begin
             @(posedge clk);
             cycle_count++;
         end
-        if (tx_fifo_read) begin
+        if (u_dut.tx_fifo_read) begin
             $display("✓ TX FIFO read detected after %0d cycles", cycle_count);
         end else begin
             $display("✗ TX FIFO read timeout after %0d cycles", timeout_cycles);
         end
-    endtask							  
+    endtask
+    
+    //======================
+    // Read from RX Fifo
+    //======================
+    // Check RX Fifo empty flag forever and read when not empty.
+    // This is like a microprocessor that reads the RX Fifo when not empty.
+    initial begin
+        rx_fifo_rden = 1'b0;  
+        wait_cycles(1);
+        
+        // Check RX Fifo empty flag forever and read when not empty.
+        while (1) begin 
+            @(posedge clk);
+            if (!rx_fifo_mt) begin
+                wait_rx_fifo_rden ();
+                $display("@%0t: Reading 0x%08X from RX FIFO", $time, rx_fifo_datout);
+            end
+        end
+    end
+    
+    // Drive RX Fifo read enable
+    task wait_rx_fifo_rden ();
+        rx_fifo_rden = 1'b1;
+        @(posedge clk);
+        rx_fifo_rden = 1'b0;
+    endtask	
+    
+//    always @(posedge clk) begin
+//        rx_fifo_rden = 1'b0;
+//        if (!rx_fifo_mt) begin
+//            rx_fifo_rden = 1'b1;
+//            $display("@%0t: Reading 0x%08X from RX FIFO", $time, rx_fifo_datout);
+//            wait_cycles(1);
+//        end
+//    end	  
     
     //================================================================
     // Main Test Sequence
@@ -458,10 +524,15 @@ endtask
         gpio_in = '0;
         execctrl_jmp_pin = 5'd10;
         shiftctrl_pull_thresh = 5'd8;
+        shiftctrl_push_thresh = 5'd4;
+        autopush_enable = 1'b1;               // TODO autopush
+        autopull_enable = 1'b1;               // TODO autopull
         pinctrl_in_base = 5'd0;
         pinctrl_out_base = 5'd0;
         pinctrl_out_count = 5'd8;    // used for pin_mask in pio_dp.sv
         state_machine_id = 2'b00;
+        
+        
 	    // OUT configuration
 //        shiftctrl_out_count = 5'd8;
 //        shiftctrl_out_shiftdir = 1'b1; // Right shift
@@ -472,7 +543,9 @@ endtask
         shiftctrl_in_count = 5'd8;      // Default 8 bits for IN
         shiftctrl_in_shiftdir = 1'b0;   // Left shift (typical for input)
         shiftctrl_autopush_en = 1'b0;   // Disable auto-push for testing
-        shiftctrl_autopush_thresh = 5'd24;						
+        shiftctrl_autopush_thresh = 5'd24;	
+        // OUT					
+        shiftctrl_out_shiftdir = 1'b1;   // right shift (typical for output)
         
         // PULL configuration
         shiftctrl_autopull_en = 1'b0;      // Disable auto-pull for initial testing  
@@ -481,7 +554,7 @@ endtask
         imem_write_addr = '0;
         imem_write_data = '0;
         irq_flags_in = '0;
-        rx_fifo_full = 1'b0;
+//        rx_fifo_full = 1'b0;
         
         // Initial reset and stabilization
         $display("=== PIO Testbench Starting ===");
@@ -532,14 +605,14 @@ endtask
         wait_cycles(1);
         
         // Preload OSR and X register for testing
-        force u_dut.u_datapath.osr_register = 32'h0000_0003;
-        force u_dut.u_datapath.osr_shift_counter = 5'd32;
-        force u_dut.u_datapath.x_register = 32'h0000_0000; // Start with X=0
+//        force u_dut.u_datapath.osr_register = 32'h0000_0003;
+//        force u_dut.u_datapath.osr_shift_counter = 5'd32;
+//        force u_dut.u_datapath.x_register = 32'h0000_0000; // Start with X=0
         
         $display("Testing JMP conditions...");
         
         // Let it run and observe PC movement
-        wait_cycles(5);
+//        wait_cycles(5);
         if (debug_pc == 5'd1) begin
             $display("✓ JMP !X: Correctly did NOT jump (X was 0)");
         end else begin
@@ -547,8 +620,8 @@ endtask
         end
         
         // Force X to non-zero for X-- test
-        force u_dut.u_datapath.x_register = 32'h0000_0002;
-        wait_cycles(3);
+//        force u_dut.u_datapath.x_register = 32'h0000_0002;
+//        wait_cycles(3);
         
         if (debug_pc == 5'd4) begin
             $display("✓ JMP X--: Correctly jumped (X was non-zero)");
@@ -556,9 +629,12 @@ endtask
             $display("✗ JMP X--: Expected PC=4, got %0d", debug_pc);
         end
         
-        release u_dut.u_datapath.osr_register;
-        release u_dut.u_datapath.osr_shift_counter;
-        release u_dut.u_datapath.x_register;
+        // Wait to complete
+        wait_cycles(12);
+        
+//        release u_dut.u_datapath.osr_register;
+//        release u_dut.u_datapath.osr_shift_counter;
+//        release u_dut.u_datapath.x_register;
         
         // Test 3: WAIT instruction
         $display("\n=== TEST 3: WAIT Instructions ===");
@@ -680,9 +756,9 @@ endtask
         wait_cycles(5);
         
         // Check results
-        if (rx_fifo_data == 32'hDEAD_BEEF && rx_fifo_write) begin
-            $display("✓ PUSH: Successfully wrote ISR to RX FIFO");
-        end 
+//        if (rx_fifo_data == 32'hDEAD_BEEF && rx_fifo_write) begin
+//            $display("✓ PUSH: Successfully wrote ISR to RX FIFO");
+//        end 
 
         // Release wait and observe loop behavior
         gpio_in[10] = 1'b1;
@@ -794,6 +870,7 @@ endtask
 
         // Setup test data
 //        force u_dut.u_datapath.x_register = 32'h0000_0000;
+//        force u_dut.u_datapath.x_register = 32'h5555_BAE2;
         force u_dut.u_datapath.y_register = 32'h5555_BAE2;
 
         $display("Testing MOV instruction decode and control signals...");
@@ -1072,7 +1149,7 @@ end
     
     // Auto-pull monitor
     always @(posedge clk) begin
-        if (tx_fifo_read) begin
+        if (u_dut.tx_fifo_read) begin
             $display("@%0t: AUTO-PULL: Reading 0x%08X from TX FIFO", $time, tx_fifo_data);
         end
     end
@@ -1096,7 +1173,7 @@ end
     // PC should never exceed instruction memory bounds
     property pc_bounds_check;
         @(posedge clk) disable iff (!rst_n)
-        debug_pc < INSTR_MEM_DEPTH;
+        debug_pc < `INSTR_MEM_DEPTH;
     endproperty
     assert property (pc_bounds_check) else $error("PC out of bounds: %0d", debug_pc);
     
