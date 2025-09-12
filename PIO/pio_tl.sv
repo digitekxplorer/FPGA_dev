@@ -15,6 +15,7 @@
 // Dependencies: pio_defs.svh
 // 
 // Revision:
+// Revision 1.3 - Single-cycle instruction execution 
 // Revision 1.2 - Instruction set complete: JMP, WAIT, IN, OUT, PUSH, PULL, MOV, SET, IRQ
 // Revision 1.1 - Implemented instructions: JMP, WAIT, IN, OUT, PUSH, PULL, MOV, SET
 // Revision 1.0 - Implemented instructions: JMP, WAIT, IN, OUT, PUSH, PULL, MOV
@@ -22,31 +23,41 @@
 // Additional Comments:
 // 
 // TODO:
-// 1) Add delay/side effects to SET instruction
+// 1) Add BRAM for program memory
+// 2) Add delay/side effects to SET instruction
+// 3) AutoPush and AutoPull with thresholds
+// 4) Single cycle instructions
+// 5) Clock divider
+// 6) Integrate PIO into abCore16 Project
+// 7) Build and test in FPGA
 //////////////////////////////////////////////////////////////////////////////////
 
-
+`include "pio_defs.svh"
 
 //================================================================
 // Top-Level PIO State Machine
 //================================================================
-module pio_tl #(
-    parameter int ADDR_WIDTH = 5,
-    parameter int REG_WIDTH = 32,
-    parameter int GPIO_WIDTH = 32,
-    parameter int INSTR_MEM_DEPTH = 32
-) (
+//module pio_tl #(
+//    parameter int INSTR_MEM_ADDR_WIDTH = 5,
+//    parameter int REG_WIDTH = 32,
+//    parameter int GPIO_WIDTH = 32,
+//    parameter int INSTR_MEM_DEPTH = 32
+//) (
+module pio_tl (
     input  logic clk,
     input  logic rst_n,
     
     // External GPIO interface
-    input  logic [GPIO_WIDTH-1:0] gpio_in,
-    output logic [GPIO_WIDTH-1:0] gpio_out,
-    output logic [GPIO_WIDTH-1:0] gpio_dir,
+    input  logic [`GPIO_WIDTH-1:0] gpio_in,
+    output logic [`GPIO_WIDTH-1:0] gpio_out,
+    output logic [`GPIO_WIDTH-1:0] gpio_dir,
     
     // Configuration registers
     input  logic [4:0] execctrl_jmp_pin,
     input  logic [4:0] shiftctrl_pull_thresh,
+    input  logic [4:0] shiftctrl_push_thresh,
+    input  logic       autopush_enable,
+    input  logic       autopull_enable,
     input  logic [4:0] pinctrl_in_base,
     input  logic [4:0] pinctrl_out_base,
     input  logic [4:0] pinctrl_out_count,
@@ -54,20 +65,18 @@ module pio_tl #(
     
     // Instruction Memory Programming Interface
     input  logic                  imem_write_en,
-    input  logic [ADDR_WIDTH-1:0] imem_write_addr,
+    input  logic [`INSTR_MEM_ADDR_WIDTH-1:0] imem_write_addr,
     input  logic [15:0]           imem_write_data,
     
     // FIFO interfaces
-    input  logic [REG_WIDTH-1:0]  tx_fifo_data,
-    input  logic                  tx_fifo_empty,
-    output logic                  tx_fifo_read,
-    
-    input  logic [REG_WIDTH-1:0]  tx_fifo_wr_data,
+    // TX Fifo  
+    input  logic [`REG_WIDTH-1:0]  tx_fifo_wr_data,
     input  logic                  tx_fifo_wren,
-    
-    output logic [REG_WIDTH-1:0]  rx_fifo_data,
-    output logic                  rx_fifo_write,
-    input  logic                  rx_fifo_full,
+    output logic                  tx_fifo_full,
+    // RX Fifo  
+    input  logic                 rx_fifo_rden,
+    output logic [`REG_WIDTH-1:0] rx_fifo_datout,
+    output logic                  rx_fifo_mt,
     
     // IRQ interface
     input  logic [7:0]            irq_flags_in,
@@ -80,25 +89,28 @@ module pio_tl #(
     input logic       shiftctrl_autopush_en,
     input logic [4:0] shiftctrl_autopush_thresh,    
     input logic       shiftctrl_autopull_en,
-    input logic [4:0] shiftctrl_autopull_thresh,											
+    input logic [4:0] shiftctrl_autopull_thresh,
+    // OUT
+    // SHIFTCTRL_OUT_SHIFTDIR
+    input logic       shiftctrl_out_shiftdir,										
     
     // Debug outputs
-    output logic [ADDR_WIDTH-1:0] debug_pc,
-    output logic [REG_WIDTH-1:0]  debug_x_reg,
-    output logic [REG_WIDTH-1:0]  debug_y_reg,
-    output logic [REG_WIDTH-1:0]  debug_osr,
+    output logic [`INSTR_MEM_ADDR_WIDTH-1:0] debug_pc,
+    output logic [`REG_WIDTH-1:0]  debug_x_reg,
+    output logic [`REG_WIDTH-1:0]  debug_y_reg,
+    output logic [`REG_WIDTH-1:0]  debug_osr,
     output logic [4:0]            debug_osr_count,
-    output logic [REG_WIDTH-1:0]  debug_isr,
+    output logic [`REG_WIDTH-1:0]  debug_isr,
     output logic [4:0]            debug_isr_count,
     output logic                  debug_waiting
 );
 
     // Internal interconnect signals between control unit and datapath
-    logic [ADDR_WIDTH-1:0] pc_current;
-    logic [REG_WIDTH-1:0]  x_reg_value;
-    logic [REG_WIDTH-1:0]  y_reg_value;
-    logic [REG_WIDTH-1:0]  osr_value;
-    logic [REG_WIDTH-1:0]  isr_value;
+    logic [`INSTR_MEM_ADDR_WIDTH-1:0] pc_current;
+    logic [`REG_WIDTH-1:0]  x_reg_value;
+    logic [`REG_WIDTH-1:0]  y_reg_value;
+    logic [`REG_WIDTH-1:0]  osr_value;
+    logic [`REG_WIDTH-1:0]  isr_value;
     logic [4:0]            osr_count;
     logic [4:0]            isr_count;
     logic                  x_is_zero;
@@ -110,6 +122,7 @@ module pio_tl #(
     // Control signals from control unit to datapath
     logic        cu_pc_write_en;
     logic [2:0]  cu_pc_src_sel;
+    logic        cu_pc_hold;
     logic        cu_x_reg_write_en;
     logic        cu_y_reg_write_en;
     logic [1:0]  cu_x_reg_src_sel;
@@ -121,6 +134,7 @@ module pio_tl #(
     logic [1:0]  cu_osr_src_sel;
     logic [4:0]  cu_osr_shift_count;
     logic        cu_osr_shift_dir;
+    logic        cu_osr_counter_reset;
     logic        cu_isr_load_en;
     logic        cu_isr_shift_en;
     logic [2:0]  cu_isr_src_sel;
@@ -139,7 +153,6 @@ module pio_tl #(
     // SET control signals from control unit to datapath
     logic        cu_set_write_en;
     logic [2:0]  cu_set_dest_sel;    // 3 bits for destination
-    logic [4:0]  cu_set_data_value;
     // IRQ control signals from control unit
     logic        cu_irq_operation_en;
     logic        cu_irq_set_operation;
@@ -148,37 +161,71 @@ module pio_tl #(
 //    logic [7:0]  cu_irq_set;          // IRQ set outputs
 
     // TX Fifo
-    logic tx_fifo_full;
+//    logic tx_fifo_full;
     logic tx_fifo_mt;
     logic [31:0] tx_fifo_datout;
+    // RX Fifo
+    logic [`REG_WIDTH-1:0]  rx_fifo_data;
+    logic                  rx_fifo_write;
+    logic                  rx_fifo_full;
     
     // Instruction memory interface
     logic [15:0] instruction_data;
     
     // Simple instruction memory implementation with write capability
-    logic [15:0] instruction_memory [0:INSTR_MEM_DEPTH-1];
+    logic [15:0] instruction_memory [0:`INSTR_MEM_DEPTH-1];
+	
+//	logic [4:0]  set_data;     // Data field (5 bits)
+//	assign set_data = instruction_data[4:0];    // Data value (5 bits) [4:0]
     
+    //================================================================
+    // PIO Instruction Memory
+    //================================================================
     // Instruction memory write (for programming)
     always_ff @(posedge clk) begin
-        if (imem_write_en && imem_write_addr < INSTR_MEM_DEPTH) begin
+        if (imem_write_en && imem_write_addr < `INSTR_MEM_DEPTH) begin
             instruction_memory[imem_write_addr] <= imem_write_data;
         end
     end
     
     // Instruction memory read - PC drives the address directly
     always_comb begin
-        instruction_data = (pc_current < INSTR_MEM_DEPTH) ? 
+        instruction_data = (pc_current < `INSTR_MEM_DEPTH) ? 
                           instruction_memory[pc_current] : 16'b0;
     end
+    
+    // PIO instruction memory using BRAM
+//    logic [15:0] imem_dout;
+//    instr_mem pio_imem (
+//        .clka   (clk),                        // input wire clka
+//        .ena    (1'b1),                       // input wire ena
+//        .wea    (imem_write_en),              // input wire [0 : 0] wea
+//        .addra  ({3'b000, imem_write_addr}),  // input wire [7 : 0] addra
+//        .dina   (imem_write_data),            // input wire [15 : 0] dina
+//        .douta  (imem_dout)                   // output wire [15 : 0] douta
+//    );
+    
+    logic [15:0] imem_dout;
+    instr_mem pio_imem (
+        .clka   (clk),    // input wire clka
+        .ena    (1'b1),      // input wire ena
+        .wea    (imem_write_en),      // input wire [0 : 0] wea
+        .addra  ({3'b000, imem_write_addr}),  // input wire [7 : 0] addra
+        .dina   (imem_write_data),    // input wire [15 : 0] dina
+        .clkb   (clk),    // input wire clkb
+        .enb    (1'b1),      // input wire enb
+        .addrb  ({3'b000, pc_current}),  // input wire [7 : 0] addrb
+        .doutb  (imem_dout)  // output wire [15 : 0] doutb
+    );
     
     //================================================================
     // Control Unit Instantiation
     //================================================================
     pio_cu #(
-        .ADDR_WIDTH(ADDR_WIDTH),
-        .REG_WIDTH(REG_WIDTH),
-        .GPIO_WIDTH(GPIO_WIDTH),
-        .INSTR_MEM_DEPTH(INSTR_MEM_DEPTH)
+        .ADDR_WIDTH(`INSTR_MEM_ADDR_WIDTH),
+        .REG_WIDTH(`REG_WIDTH),
+        .GPIO_WIDTH(`GPIO_WIDTH),
+        .INSTR_MEM_DEPTH(`INSTR_MEM_DEPTH)
     ) u_control_unit (
         .clk(clk),
         .rst_n(rst_n),
@@ -209,13 +256,14 @@ module pio_tl #(
         
         // Configuration inputs
         .execctrl_jmp_pin(execctrl_jmp_pin),
-        .shiftctrl_pull_thresh(shiftctrl_pull_thresh),
+//        .shiftctrl_pull_thresh(shiftctrl_pull_thresh),
         .pinctrl_in_base(pinctrl_in_base),
         .state_machine_id(state_machine_id),
         
         // Control signal outputs to datapath
         .pc_write_en(cu_pc_write_en),
         .pc_src_sel(cu_pc_src_sel),
+        .pc_hold(cu_pc_hold),
         .x_reg_write_en(cu_x_reg_write_en),
         .y_reg_write_en(cu_y_reg_write_en),
         .x_reg_src_sel(cu_x_reg_src_sel),
@@ -226,7 +274,8 @@ module pio_tl #(
         .osr_shift_en(cu_osr_shift_en),
         .osr_src_sel(cu_osr_src_sel),
         .osr_shift_count(cu_osr_shift_count),
-        .osr_shift_dir(cu_osr_shift_dir),
+        .osr_counter_reset(cu_osr_counter_reset),
+//        .osr_shift_dir(cu_osr_shift_dir),
         .isr_load_en(cu_isr_load_en),
         .isr_shift_en(cu_isr_shift_en),
         .isr_src_sel(cu_isr_src_sel),
@@ -250,7 +299,7 @@ module pio_tl #(
 		// SET control outputs (ADD THESE)
         .set_write_en(cu_set_write_en),
         .set_dest_sel(cu_set_dest_sel),
-        .set_data_value(cu_set_data_value),
+		
         // IRQ control outputs (ADD THESE)
         .irq_operation_en(cu_irq_operation_en),
         .irq_set_operation(cu_irq_set_operation),
@@ -276,16 +325,19 @@ module pio_tl #(
     // Datapath Instantiation
     //================================================================
     pio_dp #(
-        .ADDR_WIDTH(ADDR_WIDTH),
-        .REG_WIDTH(REG_WIDTH),
-        .GPIO_WIDTH(GPIO_WIDTH)
+        .ADDR_WIDTH(`INSTR_MEM_ADDR_WIDTH),
+        .REG_WIDTH(`REG_WIDTH),
+        .GPIO_WIDTH(`GPIO_WIDTH)
     ) u_datapath (
         .clk(clk),
         .rst_n(rst_n),
         
+        // Instruction interface - only data input, no address output needed
+        .instruction_data(instruction_data),
         // Control signals from control unit
         .pc_write_en(cu_pc_write_en),
         .pc_src_sel(cu_pc_src_sel),
+        .pc_hold(cu_pc_hold),
         .x_reg_write_en(cu_x_reg_write_en),
         .y_reg_write_en(cu_y_reg_write_en),
         .x_reg_src_sel(cu_x_reg_src_sel),
@@ -296,8 +348,12 @@ module pio_tl #(
         .osr_shift_en(cu_osr_shift_en),
         .osr_src_sel(cu_osr_src_sel),
         .osr_shift_count(cu_osr_shift_count),
-        .osr_shift_dir(cu_osr_shift_dir),
-        .shiftctrl_pull_thresh(shiftctrl_pull_thresh),													  
+        .osr_shift_dir(shiftctrl_out_shiftdir),
+        .osr_counter_reset(cu_osr_counter_reset),
+        .shiftctrl_pull_thresh(shiftctrl_pull_thresh),
+        .shiftctrl_push_thresh(shiftctrl_push_thresh),	
+        .autopush_enable(autopush_enable),
+        .autopull_enable(autopull_enable),												  
         .isr_load_en(cu_isr_load_en),
         .isr_shift_en(cu_isr_shift_en),
         .isr_src_sel(cu_isr_src_sel),
@@ -315,15 +371,17 @@ module pio_tl #(
         // SET control outputs (ADD THESE)
         .set_write_en(cu_set_write_en),
         .set_dest_sel(cu_set_dest_sel),
-        .set_data_value(cu_set_data_value),
         
 //        .tx_fifo_empty(tx_fifo_empty),                 // ab: from testbench
         .tx_fifo_empty(tx_fifo_mt),                      // ab: from TX Fifo
         .rx_fifo_full(rx_fifo_full),
         
         // Data inputs
-        .pc_immediate(instruction_data[12:8]), // Address field for JMP
-        .data_immediate({27'b0, instruction_data[4:0]}), // Simple immediate data
+//        .pc_immediate(instruction_data[4:0]), // Address field for JMP
+		// set_data
+//        .data_immediate({27'b0, instruction_data[4:0]}), // Simple immediate data
+		
+		
 //        .tx_fifo_data(tx_fifo_data),                   // ab: from testbench
         .tx_fifo_data(tx_fifo_datout),                   // ab: from TX Fifo
         .gpio_in(gpio_in),
@@ -350,35 +408,40 @@ module pio_tl #(
         // External outputs
         .gpio_out(gpio_out),
         .gpio_dir(gpio_dir),
-        .rx_fifo_data(rx_fifo_data),
-        .rx_fifo_write(rx_fifo_write)
+        .rx_fifo_data(rx_fifo_data)
+//        .rx_fifo_write(rx_fifo_write)
     );
     
 
-//    // FIFO interfaces
-//    input  logic [REG_WIDTH-1:0]  tx_fifo_data,
-//    input  logic                  tx_fifo_empty,
-//    output logic                  tx_fifo_read,
-
-//    logic tx_fifo_full;
-//    logic tx_fifo_mt;
-//    logic [31:0] tx_fifo_datout;
-
-//    logic [REG_WIDTH-1:0] rx_fifo_data;
-//    logic                 rx_fifo_write;
-//    logic                 rx_fifo_full;
-    
-    
+    // FIFO interfaces
+    // TX FIFO -> OSR (PULL)
+    // following code in datapath
+    // if(osr_load_en && osr_src_sel==`OSR_SRC_TX_FIFO) osr_register <= tx_fifo_data;
     // TX FIFO
     fifo_TxRx TX_Fifo (
-    .clk    (clk),      // input wire clk
-    .srst   (!rst_n),  // input wire srst
-    .din    (tx_fifo_wr_data),      // input wire [31 : 0] din
-    .wr_en  (tx_fifo_wren),  // input wire wr_en
-    .rd_en  (tx_fifo_read),  // input wire rd_en
-    .dout   (tx_fifo_datout),    // output wire [31 : 0] dout
-    .full   (tx_fifo_full),    // output wire full
-    .empty  (tx_fifo_mt)  // output wire empty
+    .clk    (clk),              // input clk
+    .srst   (!rst_n),           // input reset
+    .din    (tx_fifo_wr_data),  // input [31:0] din
+    .wr_en  (tx_fifo_wren),     // input wren
+    .rd_en  (tx_fifo_read),     // input rden
+    .dout   (tx_fifo_datout),   // output [31:0] dout
+    .full   (tx_fifo_full),     // output full
+    .empty  (tx_fifo_mt)        // output empty
+    );
+    
+    // RX FIFO
+    // ISR -> RX FIFO (PUSH)
+    // assign rx_fifo_data = isr_register;   // code in datapath
+    // assign rx_fifo_write = 1'b0;          // code in control unit
+    fifo_TxRx RX_Fifo (
+    .clk    (clk),              // input clk
+    .srst   (!rst_n),           // input reset
+    .din    (rx_fifo_data),     // input [31:0] din
+    .wr_en  (rx_fifo_write),    // input wren
+    .rd_en  (rx_fifo_rden),     // input rden
+    .dout   (rx_fifo_datout),   // output [31:0] dout
+    .full   (rx_fifo_full),     // output full
+    .empty  (rx_fifo_mt)        // output empty
     );
     
     // Final debug output assignments
