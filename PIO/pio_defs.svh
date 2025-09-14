@@ -17,7 +17,6 @@
 // Dependencies: None
 // 
 // Revision:
-// Revision 1.2 - Instruction set complete
 // Revision 1.0 - Initial code.
 //
 //////////////////////////////////////////////////////////////////////////////////
@@ -25,6 +24,24 @@
 
 `ifndef DEFINES_SVH
 `define DEFINES_SVH
+
+//================================================================
+// System Level Parameters
+//================================================================
+//parameter int CLK_PERIOD = 10; // 100MHz clock
+//parameter int INSTR_MEM_ADDR_WIDTH = 5;
+//parameter int REG_WIDTH = 32;
+//parameter int GPIO_WIDTH = 32;
+//parameter int INSTR_MEM_DEPTH = 32;
+
+// Main system clock
+`define CLK_PERIOD 10
+// Registers
+`define REG_WIDTH  32
+`define GPIO_WIDTH 32
+// Instruction Memory
+`define INSTR_MEM_ADDR_WIDTH  5
+`define INSTR_MEM_DEPTH       32
 
 //================================================================
 // Instruction Opcodes
@@ -38,14 +55,16 @@
 `define OP_PULL   4'b1001
 `define OP_MOV    4'b101?
 //`define OP_IRQ    4'b110?
+// Bit7 of IRQ is always 0
 `define OP_IRQ    4'b1100
 `define OP_SET    4'b111?
 
-// PC Source Select
+// PC Source Select (pc_src_sel)
 `define PC_SRC_PLUS_ONE   3'b000
 `define PC_SRC_IMMEDIATE  3'b001
 `define PC_SRC_OSR        3'b010
 `define PC_SRC_CURRENT    3'b011
+`define PC_SRC_ZERO       3'b100
 
 // Register Source Select
 `define REG_SRC_OSR       2'b00
