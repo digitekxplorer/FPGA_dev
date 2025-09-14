@@ -42,7 +42,7 @@ module pio_cu #(
     
     // Instruction Memory Interface
     input  logic [15:0] instruction_data,
-//    output logic [ADDR_WIDTH-1:0] instruction_addr,
+    input  logic        pio_go,
     
     // Status Inputs from Datapath
 //    input  logic [ADDR_WIDTH-1:0] pc_current,
@@ -145,10 +145,10 @@ module pio_cu #(
     //================================================================
     typedef enum logic [2:0] {
         RESET,
-        SETUP,
+        WAIT_GO,
         EXECUTE,
         WAIT_CONDITION,
-        DELAY
+        DLY_S
 //        AUTOPULL,
 //        AUTOPUSH,
 //        STALLED
@@ -215,17 +215,12 @@ module pio_cu #(
     logic        autopush_needed;
     logic [2:0]  computed_irq_index;
     
-//    logic        hold_pc;
+    logic        exec_state;
     
-    assign pc_hold = current_state == DELAY;
-//    always_comb begin
-//        if (next_state == DELAY) begin
-        
-//        end else begin
-        
-//        end
-        
-//    end
+    assign pc_hold = current_state == DLY_S;
+    
+    // for debug
+    assign exec_state = current_state == EXECUTE;
     
     //================================================================
     // Instruction Decode
@@ -373,11 +368,11 @@ module pio_cu #(
             current_state <= next_state;
             
             // Delay counter management
-            if (current_state == DELAY) begin
+            if (current_state == DLY_S) begin
                 if (delay_counter > 0) begin
                     delay_counter <= delay_counter - 1'b1;
                 end
-            end else if (next_state == DELAY) begin
+            end else if (next_state == DLY_S) begin
                 delay_counter <= delay_value;
             end
             
@@ -395,9 +390,15 @@ module pio_cu #(
         next_state = current_state;
         
         case (current_state)
-            RESET: next_state = SETUP;
+            RESET: next_state = WAIT_GO;
             
-            SETUP: next_state = EXECUTE;
+//            WAIT_GO: next_state = EXECUTE;
+            // Wait from Go command from uProcessor
+            WAIT_GO: begin 
+                if (pio_go) begin
+                    next_state = EXECUTE;
+                end
+            end
             
             
 //            FETCH: begin
@@ -416,33 +417,39 @@ module pio_cu #(
 //                endcase
 //            end
             
+            // NOTE: We have to use exact three opcode bits because we aren't using
+            // casez to select the instruction.
             EXECUTE: begin
-            
-                    if (opcode == `OP_WAIT) begin
+//                    if (opcode == `OP_WAIT) begin
+                    if (wait_instr) begin
                         next_state = WAIT_CONDITION;
-                    end else if (opcode == `OP_IRQ) begin
+//                    end else if (opcode == `OP_IRQ) begin
+                    end else if (irq_instr) begin
                         next_state = (irq_wait_flag) ? WAIT_CONDITION : EXECUTE;
-//                    if (opcode == `OP_PUSH && !rx_fifo_full) begin
-                    end else if (opcode == `OP_PUSH && !rx_fifo_full) begin
+//                    end else if (opcode == `OP_PUSH && !rx_fifo_full) begin
+                    end else if (push_instr && !rx_fifo_full) begin
                     // PUSH can complete
                         if (delay_value != '0) begin
-                            next_state = DELAY;
+                            next_state = DLY_S;
                         end else begin
                             next_state = EXECUTE;
                         end
-                    end else if (opcode == `OP_PUSH && rx_fifo_full && !iffull_flag) begin
+//                    end else if (opcode == `OP_PUSH && rx_fifo_full && !iffull_flag) begin
+                    end else if (push_instr && rx_fifo_full && !iffull_flag) begin
                         // PUSH blocked - stay in EXECUTE until FIFO has space
                         next_state = EXECUTE;
                         
-                    end else if (opcode == `OP_PULL && !tx_fifo_empty) begin
+//                    end else if (opcode == `OP_PULL && !tx_fifo_empty) begin
+                    end else if (pull_instr && !tx_fifo_empty) begin
                         // PULL can complete - TX FIFO has data
                         if (delay_value != '0) begin
-                            next_state = DELAY;
+                            next_state = DLY_S;
                         end else begin
                             next_state = EXECUTE;
                         end
 //                    end else if (opcode == `OP_PULL && tx_fifo_empty && !ifempty_flag) begin
-                    end else if (opcode == `OP_PULL && tx_fifo_empty && block_flag) begin
+//                    end else if (opcode == `OP_PULL && tx_fifo_empty && block_flag) begin
+                    end else if (pull_instr && tx_fifo_empty && block_flag) begin
                         // PULL blocked - stay in EXECUTE until FIFO has data
                         next_state = EXECUTE;															   
                     
@@ -450,7 +457,7 @@ module pio_cu #(
                         // Normal instruction completion
                         // JMP, IN, OUT, MOV, SET
                         if (delay_value != '0) begin
-                            next_state = DELAY;
+                            next_state = DLY_S;
                         end else begin
                             next_state = EXECUTE;
                         end
@@ -461,7 +468,7 @@ module pio_cu #(
             WAIT_CONDITION: begin
                 if (wait_condition_met) begin
                     if (delay_value != '0) begin
-                        next_state = DELAY;
+                        next_state = DLY_S;
                     end else begin
                         next_state = EXECUTE;
                     end
@@ -469,7 +476,7 @@ module pio_cu #(
                 // Stay in wait state if condition not met
             end
             
-            DELAY: begin
+            DLY_S: begin
 //                if (delay_counter == 0) begin
                 if (delay_counter == 5'b00001) begin   // early done condition
                     next_state = EXECUTE;
@@ -522,7 +529,20 @@ module pio_cu #(
         mov_op_sel = `MOV_OP_NONE;
 
         
+        // NOTE: We can use opcode definitions because we are using casez.
         case (current_state)
+            RESET: begin
+                pc_write_en = 1'b1;
+                pc_src_sel = `PC_SRC_ZERO;   // start PC at address zero
+            end
+            
+            WAIT_GO: begin
+                if (pio_go) begin
+//                    pc_write_en = 1'b1;      // TODO: instruction memory register
+                end
+                pc_src_sel = `PC_SRC_PLUS_ONE;
+            end
+            
             EXECUTE: begin
                 casez (opcode)
                     `OP_JMP: begin
@@ -788,7 +808,8 @@ module pio_cu #(
             WAIT_CONDITION: begin
                 if (wait_condition_met) begin
                     // Handle IRQ clearing for WAIT IRQ with polarity=1
-                    if (opcode == `OP_WAIT && wait_source == 2'b10 && wait_polarity) begin
+//                    if (opcode == `OP_WAIT && wait_source == 2'b10 && wait_polarity) begin
+                    if (wait_instr && wait_source == 2'b10 && wait_polarity) begin
 //                        logic [2:0] irq_index;  // moved to start of block
                         if (wait_index[4]) begin
                             irq_index = (wait_index[2:0] + state_machine_id) % 4;
@@ -807,12 +828,18 @@ module pio_cu #(
 // ***************
 // Verify this condition
 // ***************            
-            DELAY: begin
-                if (opcode == `OP_PULL && delay_counter == 0) begin
+            DLY_S: begin
+//                if (opcode == `OP_PULL && delay_counter == 0) begin
+                if (pull_instr && delay_counter == 5'b00000) begin
                     // Advance PC
                     pc_write_en = 1'b1;
                     pc_src_sel = `PC_SRC_PLUS_ONE;
                 end
+                // TODO: instruction memory register
+//                else if (jmp_instr && delay_counter == 5'b00001) begin
+//                    pc_write_en = 1'b1;
+//                    pc_src_sel = `PC_SRC_IMMEDIATE;               
+//                end
             end
             
         endcase  // end current state
@@ -838,7 +865,6 @@ module pio_cu #(
 //    assign debug_pc = pc_current;
 //    assign debug_pc = '0;
     assign debug_waiting = waiting;
-    assign debug_stalled = (current_state == DELAY) || (current_state == WAIT_CONDITION);
+    assign debug_stalled = (current_state == DLY_S) || (current_state == WAIT_CONDITION);
 
 endmodule
-
