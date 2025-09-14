@@ -170,7 +170,22 @@ module pio_dp #(
     // Program Counter
     //================================================================  
     // PC value selection
-    always_ff @(posedge clk or negedge rst_n) begin
+//    always_ff @(posedge clk or negedge rst_n) begin
+//        if (!rst_n) begin
+//            pc_reg <= '0;
+//        end else if (pc_write_en) begin
+//            case (pc_src_sel)
+//                `PC_SRC_PLUS_ONE:  pc_reg <= pc_reg + 1'b1;
+//				`PC_SRC_IMMEDIATE: pc_reg <= jmp_addr;
+//                `PC_SRC_OSR:       pc_reg <= osr_register[ADDR_WIDTH-1:0];
+//                `PC_SRC_CURRENT:   pc_reg <= pc_reg; // Hold current
+//                `PC_SRC_ZERO:      pc_reg <= '0;              // zero
+//                default:           pc_reg <= pc_reg + 1'b1;
+//            endcase
+//        end
+//    end
+    
+     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             pc_reg_selected <= '0;
         end else if (pc_write_en) begin
@@ -179,6 +194,7 @@ module pio_dp #(
 				`PC_SRC_IMMEDIATE: pc_reg_selected <= jmp_addr;
                 `PC_SRC_OSR:       pc_reg_selected <= osr_register[ADDR_WIDTH-1:0];
                 `PC_SRC_CURRENT:   pc_reg_selected <= pc_reg_selected; // Hold current
+                `PC_SRC_ZERO:      pc_reg_selected <= '0;              // zero
                 default:           pc_reg_selected <= pc_reg_selected + 1'b1;
             endcase
         end
@@ -187,7 +203,7 @@ module pio_dp #(
     // Save pc value used when cu FSM transitions to DELAY state
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            pc_reg_sav <= '0;;
+            pc_reg_sav <= '0;
         end else begin
             pc_reg_sav <= pc_reg;
         end
@@ -691,4 +707,3 @@ end
 //    assign rx_fifo_write = 1'b0; // Controlled by control unit
 
 endmodule
-
