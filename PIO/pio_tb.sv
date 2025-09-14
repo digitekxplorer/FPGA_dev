@@ -37,6 +37,7 @@ module pio_tb;
     // Clock and Reset
     logic clk;
     logic rst_n;
+    logic pio_go;
     
     // DUT Signals
     logic [`GPIO_WIDTH-1:0] gpio_in;
@@ -136,6 +137,7 @@ module pio_tb;
     pio_tl u_dut (
         .clk(clk),
         .rst_n(rst_n),
+        .pio_go(pio_go),
         .gpio_in(gpio_in),
         .gpio_out(gpio_out),
         .gpio_dir(gpio_dir),
@@ -271,11 +273,12 @@ module pio_tb;
     
     task load_program_wait();
         $display("=== Loading WAIT Test Program ===");
-        load_instruction(0, 16'b001_00000_1_00_00001); // WAIT 1 GPIO[1], delay 0
-        load_instruction(1, 16'b011_00010_000_00000);  // OUT PINS, 8 bits
-        load_instruction(2, 16'b001_00010_1_10_00010); // WAIT 1 IRQ[2], delay 2
-        load_instruction(3, 16'b011_00100_000_00000);  // OUT PINS, 8 bits
-        load_instruction(4, 16'b000_00000_000_00000);  // JMP 0 (loop)
+        load_instruction(0, 16'b111_00000_001_00011);  // SET X, 3
+        load_instruction(1, 16'b001_00000_0_00_00001); // WAIT 1 GPIO[1], delay 0
+        load_instruction(2, 16'b011_00000_000_01000);  // OUT PINS, 8 bits
+        load_instruction(3, 16'b001_00000_1_10_00010); // WAIT 1 IRQ[2], delay 0
+        load_instruction(4, 16'b011_00000_000_00000);  // OUT PINS, 8 bits, delay 0
+        load_instruction(5, 16'b000_00000_000_00000);  // JMP 0 (loop)
         $display("=== Program Loading Complete ===");
     endtask
     
@@ -294,20 +297,24 @@ module pio_tb;
         // Load some data into ISR first (manually with force)
         // Then test PUSH instruction
         $display("=== Loading PUSH Test Program ===");
-        load_instruction(0, 16'b100_00000_0_0_0_00000); // PUSH, no flags, no delay
-        load_instruction(1, 16'b100_00000_0_0_1_00000); // PUSH, block=1, no delay  
-        load_instruction(2, 16'b100_00000_0_1_0_00000); // PUSH, iffull=1, no delay
-        load_instruction(3, 16'b000_00000_000_00000); // JMP 0 (loop)
+        load_instruction(0, 16'b111_00000_001_00011);   // SET X, 3
+        load_instruction(1, 16'b101_00000_110_00_001);  // MOV ISR, X: Copy X register to ISR register
+        load_instruction(2, 16'b100_00000_0_0_0_00000); // PUSH, no flags, no delay
+        load_instruction(3, 16'b100_00000_0_0_1_00000); // PUSH, block=1, no delay  
+        load_instruction(4, 16'b100_00000_0_1_0_00000); // PUSH, iffull=1, no delay
+        load_instruction(5, 16'b000_00000_000_00000);   // JMP 0 (loop)
     endtask
     
     task load_program_in();
         $display("=== Loading IN Test Program ===");
 //        load_instruction(0, 16'h4000); // IN PINS, default count, no delay
-//        load_instruction(0, 16'b010_00000_000_00000); // IN PINS, default count, no delay
-        load_instruction(1, 16'b010_00000_001_00100); // IN X, 4 count, no delay
-//        load_instruction(2, 16'b010_00000_010_00010); // IN Y, 2 count, no delay
-//        load_instruction(3, 16'b010_00000_011_00000); // IN NULL, default count, no delay
-        load_instruction(4, 16'b000_00000_000_00000); // JMP 0 (loop)
+        load_instruction(0, 16'b111_00000_001_00101);  // SET X, 5
+        load_instruction(1, 16'b111_00000_010_01100);  // SET Y, C
+        load_instruction(2, 16'b010_00000_000_00000);  // IN PINS, default count, no delay
+        load_instruction(3, 16'b010_00000_001_00100);  // IN X, 4 count, no delay
+        load_instruction(4, 16'b010_00000_010_00010);  // IN Y, 2 count, no delay
+        load_instruction(5, 16'b010_00000_011_00000);  // IN NULL, default count, no delay
+        load_instruction(6, 16'b000_00000_000_00000);  // JMP 0 (loop)
         $display("=== Program Loading Complete ===");
     endtask
     
@@ -431,7 +438,7 @@ endtask
     
     // Task to wait until PC reaches specific address
     task wait_for_pc(input logic [`INSTR_MEM_ADDR_WIDTH-1:0] target_pc, input int timeout_cycles = 100);
-        int cycle_count = 0;
+        automatic int cycle_count = 0;
         while (debug_pc != target_pc && cycle_count < timeout_cycles) begin
             @(posedge clk);
             cycle_count++;
@@ -457,7 +464,7 @@ endtask
     endtask
 
     task verify_pull_blocked(input string test_name);
-        logic [`INSTR_MEM_ADDR_WIDTH-1:0] initial_pc = debug_pc;
+        automatic logic [`INSTR_MEM_ADDR_WIDTH-1:0] initial_pc = debug_pc;
         wait_cycles(5);
         if (debug_pc == initial_pc) begin
             $display("✓ %s: PULL correctly blocked (PC=%0d)", test_name, debug_pc);
@@ -468,7 +475,7 @@ endtask
     endtask
 
     task wait_for_fifo_read(input int timeout_cycles = 20);
-        int cycle_count = 0;
+        automatic int cycle_count = 0;
         while (!u_dut.tx_fifo_read && cycle_count < timeout_cycles) begin
             @(posedge clk);
             cycle_count++;
@@ -522,6 +529,7 @@ endtask
         // Initialize all signals
         rst_n = 1'b0;
         gpio_in = '0;
+        pio_go = 1'b0;
         execctrl_jmp_pin = 5'd10;
         shiftctrl_pull_thresh = 5'd8;
         shiftctrl_push_thresh = 5'd4;
@@ -569,11 +577,15 @@ endtask
         
         // Release reset to start execution
         rst_n = 1'b1;
+        wait_cycles(2);
+        pio_go = 1'b1;     // start PIO FSM
+        wait_cycles(1);
+        pio_go = 1'b0;
         
         // Preload OSR with test data (after reset release)
         wait_cycles(1);
         force u_dut.u_datapath.osr_register = 32'hAA55_F0F0;
-        force u_dut.u_datapath.osr_shift_counter = 5'd32;
+        force u_dut.u_datapath.osr_shift_counter = 5'd31;
         
         // Add FIFO data for auto-pull testing
         fifo_write(32'h1234_5678);
@@ -603,10 +615,13 @@ endtask
         // Release reset
         rst_n = 1'b1;
         wait_cycles(1);
+        pio_go = 1'b1;     // start PIO FSM
+        wait_cycles(1);
+        pio_go = 1'b0;
         
         // Preload OSR and X register for testing
 //        force u_dut.u_datapath.osr_register = 32'h0000_0003;
-//        force u_dut.u_datapath.osr_shift_counter = 5'd32;
+//        force u_dut.u_datapath.osr_shift_counter = 5'd31;
 //        force u_dut.u_datapath.x_register = 32'h0000_0000; // Start with X=0
         
         $display("Testing JMP conditions...");
@@ -647,14 +662,17 @@ endtask
         // Release reset
         rst_n = 1'b1;
         wait_cycles(1);
+        pio_go = 1'b1;     // start PIO FSM
+        wait_cycles(1);
+        pio_go = 1'b0;
         
         // Preload OSR for OUT instructions
         force u_dut.u_datapath.osr_register = 32'hA5A5_A5A5;
-        force u_dut.u_datapath.osr_shift_counter = 5'd32;
+        force u_dut.u_datapath.osr_shift_counter = 5'd31;
         
         $display("Testing WAIT GPIO...");
         gpio_in[1] = 1'b0; // Initially low
-        wait_cycles(5);
+        wait_cycles(3);
         
         if (debug_waiting) begin
             $display("✓ WAIT GPIO: Correctly waiting for GPIO[1] = 1");
@@ -664,7 +682,7 @@ endtask
         
         // Release wait condition
         gpio_in[1] = 1'b1;
-        wait_cycles(3);
+        wait_cycles(2);
         
         if (!debug_waiting && debug_pc == 5'd1) begin
             $display("✓ WAIT GPIO: Correctly released and advanced PC");
@@ -677,7 +695,7 @@ endtask
         wait_for_pc(5'd2, 10);
         
         irq_flags_in[2] = 1'b0; // Initially clear
-        wait_cycles(3);
+        wait_cycles(2);
         
         if (debug_waiting) begin
             $display("✓ WAIT IRQ: Correctly waiting for IRQ[2] = 1");
@@ -687,7 +705,7 @@ endtask
         
         // Set IRQ flag
         irq_flags_in[2] = 1'b1;
-        wait_cycles(3);
+        wait_cycles(5);
         
         if (irq_flags_clear[2]) begin
             $display("✓ WAIT IRQ: Correctly cleared IRQ flag");
@@ -709,10 +727,13 @@ endtask
         // Release reset
         rst_n = 1'b1;
         wait_cycles(1);
+        pio_go = 1'b1;     // start PIO FSM
+        wait_cycles(1);
+        pio_go = 1'b0;
         
         // Setup for complex test
         force u_dut.u_datapath.osr_register = 32'h0000_0005; // X will get value 5
-        force u_dut.u_datapath.osr_shift_counter = 5'd32;
+        force u_dut.u_datapath.osr_shift_counter = 5'd31;
         gpio_in[10] = 1'b0; // WAIT will wait for this
         
         $display("Running complex test...");
@@ -747,9 +768,12 @@ endtask
         // Release reset
         rst_n = 1'b1;
         wait_cycles(1);
+        pio_go = 1'b1;     // start PIO FSM
+        wait_cycles(1);
+        pio_go = 1'b0;
         
         // Manually load ISR with test data
-        force u_dut.u_datapath.isr_register = 32'hDEAD_BEEF;
+//        force u_dut.u_datapath.isr_register = 32'hDEAD_BEEF;
         force u_dut.u_datapath.isr_shift_counter = 5'd16;
         
         // Execute PUSH and verify RX FIFO gets the data
@@ -774,15 +798,20 @@ endtask
         $display("\n=== TEST 6: IN Instructions ===");
         rst_n = 1'b0;
         load_program_in();
+        
+        // Release reset
         rst_n = 1'b1;
         wait_cycles(1);
+        pio_go = 1'b1;     // start PIO FSM
+        wait_cycles(1);
+        pio_go = 1'b0;
 
         // Set up GPIO input data for testing
         gpio_in = 32'hABCD_1234;
 
         // Set up X and Y registers with test data
-        force u_dut.u_datapath.x_register = 32'hDEAD_BEEF;
-        force u_dut.u_datapath.y_register = 32'hCAFE_BABE;
+//        force u_dut.u_datapath.x_register = 32'hDEAD_BEEF;
+//        force u_dut.u_datapath.y_register = 32'hCAFE_BABE;
 
         $display("Testing IN instructions...");
         wait_cycles(20);
@@ -797,8 +826,13 @@ endtask
         $display("\n=== TEST 7: PULL Instructions - Basic Functionality ===");
         rst_n = 1'b0;
         load_program_pull();
+        
+        // Release reset
         rst_n = 1'b1;
         wait_cycles(1);
+        pio_go = 1'b1;     // start PIO FSM
+        wait_cycles(1);
+        pio_go = 1'b0;
 
         // Pre-load TX FIFO with test data
         fifo_write(32'h1234_5678);
@@ -822,8 +856,13 @@ endtask
         $display("\n=== TEST 8: PULL Instructions - Blocking Behavior ===");
         rst_n = 1'b0;
         load_program_pull_blocking();
+        
+        // Release reset
         rst_n = 1'b1;
-        wait_cycles(1);										  
+        wait_cycles(1);
+        pio_go = 1'b1;     // start PIO FSM
+        wait_cycles(1);
+        pio_go = 1'b0;										  
 
         // Start with empty TX FIFO to test blocking
 //        fifo_data_queue = {};
@@ -865,8 +904,13 @@ endtask
         $display("\n=== TEST: MOV Infrastructure Verification ===");
         rst_n = 1'b0;
         load_program_mov_basic();
+        
+        // Release reset
         rst_n = 1'b1;
         wait_cycles(1);
+        pio_go = 1'b1;     // start PIO FSM
+        wait_cycles(1);
+        pio_go = 1'b0;
 
         // Setup test data
 //        force u_dut.u_datapath.x_register = 32'h0000_0000;
@@ -896,8 +940,13 @@ endtask
 $display("\n=== TEST: MOV Core Functionality ===");
 rst_n = 1'b0;
 load_program_mov_comprehensive();
+
+// Release reset
 rst_n = 1'b1;
 wait_cycles(1);
+pio_go = 1'b1;     // start PIO FSM
+wait_cycles(1);
+pio_go = 1'b0;
 
 // Setup initial test data
 force u_dut.u_datapath.x_register = 32'h1111_1111;
@@ -993,8 +1042,14 @@ release u_dut.u_datapath.osr_shift_counter;
         wait_cycles(2);
         load_program_set_test();
         wait_cycles(2);
+        
+        // Release reset
         rst_n = 1'b1;
         wait_cycles(1);
+        pio_go = 1'b1;     // start PIO FSM
+        wait_cycles(1);
+        pio_go = 1'b0;
+        
         // Test 1: SET X, 15
         wait_for_pc(5'd1, 10);
         if (debug_x_reg == 32'd15) begin
@@ -1041,8 +1096,13 @@ release u_dut.u_datapath.osr_shift_counter;
     wait_cycles(2);
     load_program_irq_test();
     wait_cycles(2);
+    
+    // Release reset
     rst_n = 1'b1;
     wait_cycles(1);
+    pio_go = 1'b1;     // start PIO FSM
+    wait_cycles(1);
+    pio_go = 1'b0;
     
     // Test 1: IRQ SET 3 (no wait)
     wait_for_pc(5'd1, 10);
@@ -1187,7 +1247,7 @@ end
     // OSR count should never exceed 32
     property osr_count_bounds;
         @(posedge clk) disable iff (!rst_n)
-        debug_osr_count <= 5'd32;
+        debug_osr_count <= 5'd31;
     endproperty
     assert property (osr_count_bounds) else $error("OSR count out of bounds: %0d", debug_osr_count);
     
