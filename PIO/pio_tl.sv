@@ -46,6 +46,7 @@
 module pio_tl (
     input  logic clk,
     input  logic rst_n,
+    input  logic pio_go,
     
     // External GPIO interface
     input  logic [`GPIO_WIDTH-1:0] gpio_in,
@@ -189,22 +190,26 @@ module pio_tl (
     end
     
     // Instruction memory read - PC drives the address directly
+    // NO delays between pc_current and instruction data
     always_comb begin
-        instruction_data = (pc_current < `INSTR_MEM_DEPTH) ? 
-                          instruction_memory[pc_current] : 16'b0;
+        if (pc_current < `INSTR_MEM_DEPTH) begin
+            instruction_data = instruction_memory[pc_current];
+        end else begin
+            instruction_data = 16'h0;
+        end
     end
     
-    // PIO instruction memory using BRAM
-//    logic [15:0] imem_dout;
-//    instr_mem pio_imem (
-//        .clka   (clk),                        // input wire clka
-//        .ena    (1'b1),                       // input wire ena
-//        .wea    (imem_write_en),              // input wire [0 : 0] wea
-//        .addra  ({3'b000, imem_write_addr}),  // input wire [7 : 0] addra
-//        .dina   (imem_write_data),            // input wire [15 : 0] dina
-//        .douta  (imem_dout)                   // output wire [15 : 0] douta
-//    );
     
+    // Instruction memory with output register (one clk delay)
+//    always_ff @(posedge clk) begin
+//        if (pc_current < `INSTR_MEM_DEPTH) begin
+//            instruction_data <= instruction_memory[pc_current];
+//        end else begin
+//            instruction_data <= 16'h0;
+//        end
+//    end
+    
+    // PIO instruction memory using BRAM   
     logic [15:0] imem_dout;
     instr_mem pio_imem (
         .clka   (clk),    // input wire clka
@@ -229,6 +234,7 @@ module pio_tl (
     ) u_control_unit (
         .clk(clk),
         .rst_n(rst_n),
+        .pio_go(pio_go),
         
         // Instruction interface - only data input, no address output needed
         .instruction_data(instruction_data),
