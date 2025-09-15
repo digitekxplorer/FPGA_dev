@@ -15,6 +15,7 @@
 // Dependencies: pio_defs.svh
 // 
 // Revision:
+// Revision 1.4 - Fixed and enhanced IRQ instruction 
 // Revision 1.3 - Single-cycle instruction execution 
 // Revision 1.2 - Instruction set complete: JMP, WAIT, IN, OUT, PUSH, PULL, MOV, SET, IRQ
 // Revision 1.1 - Implemented instructions: JMP, WAIT, IN, OUT, PUSH, PULL, MOV, SET
@@ -71,11 +72,11 @@ module pio_tl (
     
     // FIFO interfaces
     // TX Fifo  
-    input  logic [`REG_WIDTH-1:0]  tx_fifo_wr_data,
+    input  logic [`REG_WIDTH-1:0] tx_fifo_wr_data,
     input  logic                  tx_fifo_wren,
     output logic                  tx_fifo_full,
     // RX Fifo  
-    input  logic                 rx_fifo_rden,
+    input  logic                  rx_fifo_rden,
     output logic [`REG_WIDTH-1:0] rx_fifo_datout,
     output logic                  rx_fifo_mt,
     
@@ -100,10 +101,10 @@ module pio_tl (
     output logic [`REG_WIDTH-1:0]  debug_x_reg,
     output logic [`REG_WIDTH-1:0]  debug_y_reg,
     output logic [`REG_WIDTH-1:0]  debug_osr,
-    output logic [4:0]            debug_osr_count,
+    output logic [4:0]             debug_osr_count,
     output logic [`REG_WIDTH-1:0]  debug_isr,
-    output logic [4:0]            debug_isr_count,
-    output logic                  debug_waiting
+    output logic [4:0]             debug_isr_count,
+    output logic                   debug_waiting
 );
 
     // Internal interconnect signals between control unit and datapath
@@ -311,7 +312,7 @@ module pio_tl (
         .irq_set_operation(cu_irq_set_operation),
         .irq_wait_for_clear(cu_irq_wait_for_clear),
         .irq_target_index(cu_irq_target_index),
-        .irq_set(irq_flags_set),                     // IRQ output
+//        .irq_set(irq_flags_set),                     // set in pio_dp
         
         .tx_fifo_read(tx_fifo_read),
         .rx_fifo_write(rx_fifo_write),
@@ -323,9 +324,6 @@ module pio_tl (
         .debug_stalled()
     );
     assign debug_pc = pc_current;
-    
-    // Connect to top level outputs:
-//    assign irq_flags_set = cu_irq_set;
     
     //================================================================
     // Datapath Instantiation
@@ -410,6 +408,14 @@ module pio_tl (
         .x_not_equal_y(x_not_equal_y),
         .osr_below_threshold(osr_below_threshold),
         .isr_above_threshold(isr_above_threshold),
+        
+        // IRQ
+        .irq_operation_en(cu_irq_operation_en),
+        .irq_set_operation(cu_irq_set_operation), 
+        .irq_wait_for_clear(cu_irq_wait_for_clear),
+        .irq_target_index(cu_irq_target_index),
+        .irq_set_request(irq_flags_set),
+        .irq_clear_request(irq_flags_clear),
         
         // External outputs
         .gpio_out(gpio_out),
