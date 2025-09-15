@@ -160,4 +160,20 @@
 // Clear IRQ, wait for clear (unusual)
 `define IRQ_OP_CLEAR_WAIT   2'b11
 
+// IRQ Instruction Field Positions
+// IRQ clear flag bit position
+`define IRQ_CLEAR_BIT     6
+// IRQ wait flag bit position  
+`define IRQ_WAIT_BIT      5
+// IRQ relative addressing bit
+`define IRQ_REL_BIT       4
+// Mask for IRQ index bits [2:0]
+`define IRQ_INDEX_MASK    3'b111
+
+// IRQ Limits
+// Maximum IRQ index (0-7)
+`define MAX_IRQ_INDEX     7
+// Maximum state machines for relative addressing
+`define MAX_STATE_MACHINES 4
+
 `endif // DEFINES_SVH
