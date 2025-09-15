@@ -113,6 +113,15 @@ module pio_dp #(
     output logic                  osr_below_threshold,
     output logic                  isr_above_threshold,
     
+    // IRQ
+    input  logic        irq_operation_en,      // Enable IRQ operation
+    input  logic        irq_set_operation,     // 1=set IRQ, 0=clear IRQ  
+    input  logic        irq_wait_for_clear,    // Wait for IRQ clear flag
+    input  logic [4:0]  irq_target_index,      // Target IRQ index (0-7)
+    // IRQ Status Outputs (ADD THESE)
+    output logic [7:0]  irq_set_request,       // IRQ set requests (one-shot)
+    output logic [7:0]  irq_clear_request,     // IRQ clear requests (one-shot)
+    
     // External Outputs
     output logic [GPIO_WIDTH-1:0] gpio_out,
     output logic [GPIO_WIDTH-1:0] gpio_dir,
@@ -150,6 +159,14 @@ module pio_dp #(
     logic [REG_WIDTH-1:0] set_data_extended;
 //    logic [REG_WIDTH-1:0] data_immediate;
 
+    // IRQ Management Registers
+    logic [7:0]  irq_set_pending;      // Tracks pending IRQ set operations
+    logic [7:0]  irq_clear_pending;    // Tracks pending IRQ clear operations
+//    logic        irq_set_operation;     // 1=set IRQ, 0=clear IRQ  
+//    logic        irq_wait_for_clear;    // Wait for IRQ clear flag
+//    logic [4:0]  irq_target_index;      // Target IRQ index (0-7)
+    
+
     logic [ADDR_WIDTH-1:0] pc_reg_sav;
 
     //================================================================
@@ -164,6 +181,11 @@ module pio_dp #(
         set_data_extended = {27'b0, instruction_data[4:0]};  // immediate set data
         // Immediate data for X, Y, OSR, and GPIO registers
 //        data_immediate = {27'b0, instruction_data[4:0]};
+        
+        // IRQ
+//        irq_set_operation = instruction_data[6];
+//        irq_wait_for_clear = instruction_data[5];
+//        irq_target_index = instruction_data[4:0];
     end
     
     //================================================================
@@ -236,6 +258,44 @@ module pio_dp #(
 //    end
     
     
+    
+    //================================================================
+    // IRQ Flag Management Logic
+    //================================================================
+    logic irq_target_cond;
+    assign irq_target_cond = irq_operation_en && irq_target_index[2:0] < 8;
+    
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            irq_set_request <= 8'b0;
+            irq_clear_request <= 8'b0;
+            irq_set_pending <= 8'b0;
+            irq_clear_pending <= 8'b0;
+        end else begin
+            // Clear the one-shot request signals by default
+            irq_set_request <= 8'b0;
+            irq_clear_request <= 8'b0;
+            // Clear pending flags when operation completes
+            // (This would be enhanced based on system feedback)
+            // For now, clear pending flags after one cycle
+            irq_set_pending <= 8'b0;
+            irq_clear_pending <= 8'b0;
+        
+            // Handle IRQ operations from control unit
+//            if (irq_operation_en && irq_target_index[2:0] < 8) begin
+            if (irq_target_cond) begin
+                if (irq_set_operation) begin
+                    // Set IRQ flag
+                    irq_set_request[irq_target_index[2:0]] <= 1'b1;
+                    irq_set_pending[irq_target_index[2:0]] <= 1'b1;
+                end else begin
+                    // Clear IRQ flag  
+                    irq_clear_request[irq_target_index[2:0]] <= 1'b1;
+                    irq_clear_pending[irq_target_index[2:0]] <= 1'b1;
+                end
+            end
+        end
+    end
     
     //================================================================
     // X and Y Scratch Registers
@@ -589,14 +649,12 @@ always_ff @(posedge clk or negedge rst_n) begin
     end else begin
         // Existing OUT instruction logic
         if (gpio_write_en) begin
-//            logic [GPIO_WIDTH-1:0] pin_mask;
             pin_mask = ((32'h0000_0001 << pinctrl_out_count) - 1) << pinctrl_out_base;
             gpio_output_reg <= (gpio_output_reg & ~pin_mask) | 
                               ((gpio_write_data << pinctrl_out_base) & pin_mask);
         end
         
         if (gpio_dir_write_en) begin
-//            logic [GPIO_WIDTH-1:0] pin_mask;
             pin_mask = ((32'h0000_0001 << pinctrl_out_count) - 1) << pinctrl_out_base;
             gpio_direction_reg <= (gpio_direction_reg & ~pin_mask) | 
                                  ((gpio_write_data << pinctrl_out_base) & pin_mask);
@@ -604,7 +662,6 @@ always_ff @(posedge clk or negedge rst_n) begin
         
         // MOV to PINS - CORRECTED destination check
         if (mov_write_en && mov_dest_sel == `MOV_DEST_PINS) begin // 3'b000
-            logic [GPIO_WIDTH-1:0] pin_mask;
             pin_mask = ((32'h0000_0001 << pinctrl_out_count) - 1) << pinctrl_out_base;
             gpio_output_reg <= (gpio_output_reg & ~pin_mask) | 
                               ((mov_write_data << pinctrl_out_base) & pin_mask);
@@ -707,3 +764,4 @@ end
 //    assign rx_fifo_write = 1'b0; // Controlled by control unit
 
 endmodule
+
