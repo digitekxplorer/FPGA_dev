@@ -580,7 +580,7 @@ endtask
         wait_cycles(2);
         pio_go = 1'b1;     // start PIO FSM
         wait_cycles(1);
-        pio_go = 1'b0;
+//        pio_go = 1'b0;
         
         // Preload OSR with test data (after reset release)
         wait_cycles(1);
@@ -593,6 +593,7 @@ endtask
         
         $display("Starting OUT instruction test...");
         wait_cycles(20);
+        pio_go = 1'b0;    // stop FSM
         
         // Verify results
         if (gpio_out[7:0] == 8'hF0) begin
@@ -617,7 +618,7 @@ endtask
         wait_cycles(1);
         pio_go = 1'b1;     // start PIO FSM
         wait_cycles(1);
-        pio_go = 1'b0;
+//        pio_go = 1'b0;
         
         // Preload OSR and X register for testing
 //        force u_dut.u_datapath.osr_register = 32'h0000_0003;
@@ -646,6 +647,7 @@ endtask
         
         // Wait to complete
         wait_cycles(12);
+        pio_go = 1'b0;    // stop FSM
         
 //        release u_dut.u_datapath.osr_register;
 //        release u_dut.u_datapath.osr_shift_counter;
@@ -664,7 +666,7 @@ endtask
         wait_cycles(1);
         pio_go = 1'b1;     // start PIO FSM
         wait_cycles(1);
-        pio_go = 1'b0;
+//        pio_go = 1'b0;
         
         // Preload OSR for OUT instructions
         force u_dut.u_datapath.osr_register = 32'hA5A5_A5A5;
@@ -706,6 +708,7 @@ endtask
         // Set IRQ flag
         irq_flags_in[2] = 1'b1;
         wait_cycles(5);
+        pio_go = 1'b0;    // stop FSM
         
         if (irq_flags_clear[2]) begin
             $display("✓ WAIT IRQ: Correctly cleared IRQ flag");
@@ -729,7 +732,7 @@ endtask
         wait_cycles(1);
         pio_go = 1'b1;     // start PIO FSM
         wait_cycles(1);
-        pio_go = 1'b0;
+//        pio_go = 1'b0;
         
         // Setup for complex test
         force u_dut.u_datapath.osr_register = 32'h0000_0005; // X will get value 5
@@ -749,6 +752,7 @@ endtask
         // Release wait and observe loop behavior
         gpio_in[10] = 1'b1;
         wait_cycles(5);
+        pio_go = 1'b0;    // stop FSM
         
         $display("Final state: PC=%0d, X=%0d, Y=%0d, OSR=0x%08X", 
                 debug_pc, debug_x_reg, debug_y_reg, debug_osr);
@@ -770,7 +774,7 @@ endtask
         wait_cycles(1);
         pio_go = 1'b1;     // start PIO FSM
         wait_cycles(1);
-        pio_go = 1'b0;
+//        pio_go = 1'b0;
         
         // Manually load ISR with test data
 //        force u_dut.u_datapath.isr_register = 32'hDEAD_BEEF;
@@ -787,6 +791,7 @@ endtask
         // Release wait and observe loop behavior
         gpio_in[10] = 1'b1;
         wait_cycles(5);
+        pio_go = 1'b0;    // stop FSM
         
         $display("Final PUSH content: PC=%0d, X=%0d, Y=%0d, OSR=0x%08X", 
                 debug_pc, debug_x_reg, debug_y_reg, debug_osr);
@@ -804,7 +809,7 @@ endtask
         wait_cycles(1);
         pio_go = 1'b1;     // start PIO FSM
         wait_cycles(1);
-        pio_go = 1'b0;
+//        pio_go = 1'b0;
 
         // Set up GPIO input data for testing
         gpio_in = 32'hABCD_1234;
@@ -815,6 +820,7 @@ endtask
 
         $display("Testing IN instructions...");
         wait_cycles(20);
+        pio_go = 1'b0;    // stop FSM
 
         // Verify ISR contains expected data after IN operations
         $display("Final ISR content: 0x%08X, count: %0d", debug_isr, debug_isr_count);
@@ -832,7 +838,7 @@ endtask
         wait_cycles(1);
         pio_go = 1'b1;     // start PIO FSM
         wait_cycles(1);
-        pio_go = 1'b0;
+//        pio_go = 1'b0;
 
         // Pre-load TX FIFO with test data
         fifo_write(32'h1234_5678);
@@ -848,7 +854,9 @@ endtask
         wait_for_pc(5'd1, 20);
         verify_pull_result(32'h1234_5678, "Basic PULL");																			  
         // Continue execution to test other PULL variants
-        wait_for_pc(5'd0, 30); // Wait for loop to complete							
+        wait_for_pc(5'd0, 30); // Wait for loop to complete	
+        pio_go = 1'b0;    // stop FSM
+        						
         $display("Final OSR after PULL tests: 0x%08X, OSR count: %0d", debug_osr, debug_osr_count);
         release u_dut.u_datapath.x_register;					   
         
@@ -862,7 +870,7 @@ endtask
         wait_cycles(1);
         pio_go = 1'b1;     // start PIO FSM
         wait_cycles(1);
-        pio_go = 1'b0;										  
+//        pio_go = 1'b0;										  
 
         // Start with empty TX FIFO to test blocking
 //        fifo_data_queue = {};
@@ -889,6 +897,7 @@ endtask
 
         // Test ifempty=1 behavior - wait for PC to reach instruction 2
         wait_cycles(20);
+        pio_go = 1'b0;    // stop FSM
 
         if (debug_osr == 32'hBAD_C0DE) begin
             $display("✓ PULL ifempty=1: Successfully loaded X register when FIFO empty");
@@ -910,7 +919,7 @@ endtask
         wait_cycles(1);
         pio_go = 1'b1;     // start PIO FSM
         wait_cycles(1);
-        pio_go = 1'b0;
+//        pio_go = 1'b0;
 
         // Setup test data
 //        force u_dut.u_datapath.x_register = 32'h0000_0000;
@@ -921,6 +930,7 @@ endtask
 
         // Let it run for a few cycles to verify no crashes
         wait_cycles(10);
+        pio_go = 1'b0;    // stop FSM
 
         if (debug_pc <= 5'd2) begin
             $display("✓ MOV Infrastructure: PC advancing correctly");
@@ -946,7 +956,7 @@ rst_n = 1'b1;
 wait_cycles(1);
 pio_go = 1'b1;     // start PIO FSM
 wait_cycles(1);
-pio_go = 1'b0;
+//pio_go = 1'b0;
 
 // Setup initial test data
 force u_dut.u_datapath.x_register = 32'h1111_1111;
@@ -1022,6 +1032,8 @@ end
 
 // Let it run for a few cycles to verify no crashes
 wait_cycles(10);
+pio_go = 1'b0;    // stop FSM
+
 $display("MOV Phase 2 testing complete.");
 
 release u_dut.u_datapath.x_register;
@@ -1048,7 +1060,7 @@ release u_dut.u_datapath.osr_shift_counter;
         wait_cycles(1);
         pio_go = 1'b1;     // start PIO FSM
         wait_cycles(1);
-        pio_go = 1'b0;
+//        pio_go = 1'b0;
         
         // Test 1: SET X, 15
         wait_for_pc(5'd1, 10);
@@ -1084,6 +1096,7 @@ release u_dut.u_datapath.osr_shift_counter;
     
         // Let it run for a few cycles to verify no crashes
         wait_cycles(10);
+        pio_go = 1'b0;    // stop FSM
         
         $display("SET instruction testing complete.\n");
         
@@ -1102,7 +1115,7 @@ release u_dut.u_datapath.osr_shift_counter;
     wait_cycles(1);
     pio_go = 1'b1;     // start PIO FSM
     wait_cycles(1);
-    pio_go = 1'b0;
+//    pio_go = 1'b0;
     
     // Test 1: IRQ SET 3 (no wait)
     wait_for_pc(5'd1, 10);
@@ -1137,6 +1150,7 @@ release u_dut.u_datapath.osr_shift_counter;
     // Simulate system clearing the IRQ
     irq_flags_in[1] = 1'b0;
     wait_cycles(3);
+    pio_go = 1'b0;    // stop FSM
     
     if (!debug_waiting && debug_pc == 5'd3) begin
         $display("✓ IRQ SET 1 WAIT: Successfully released wait and advanced PC");
