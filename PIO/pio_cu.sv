@@ -68,7 +68,7 @@ module pio_cu #(
     input  logic [4:0] execctrl_jmp_pin,
 //    input  logic [4:0] shiftctrl_pull_thresh,
     input  logic [4:0] pinctrl_in_base,
-    input  logic [1:0] state_machine_id,
+    input  logic [1:0] state_machine_id, 
     
     // PULL instruction
     input logic         shiftctrl_autopull_en,
@@ -120,12 +120,13 @@ module pio_cu #(
     output logic        set_write_en,
     output logic [2:0]  set_dest_sel,   // 3 bits for destination
 //    output logic [4:0]  set_data_value,
+    
     // IRQ Control
     output logic        irq_operation_en,
     output logic        irq_set_operation,
     output logic        irq_wait_for_clear,
     output logic [4:0]  irq_target_index,
-    output logic [7:0]  irq_set,        // Set IRQ flags
+//    output logic [7:0]  irq_set,        // Set IRQ flags
     
     // FIFO Control
     output logic        tx_fifo_read,
@@ -211,8 +212,8 @@ module pio_cu #(
     logic        waiting;
     logic        jmp_condition_met;
     logic        wait_condition_met;
-    logic        autopull_needed;
-    logic        autopush_needed;
+//    logic        autopull_needed;
+//    logic        autopush_needed;
     logic [2:0]  computed_irq_index;
     
     logic        exec_state;
@@ -291,7 +292,6 @@ module pio_cu #(
     //================================================================
     logic [2:0] irq_index_eval;
     always_comb begin
-//        logic [2:0] irq_index;
         casez (opcode)
             `OP_JMP: begin
                 case (jmp_cond)
@@ -301,7 +301,7 @@ module pio_cu #(
                     3'b011: jmp_condition_met = y_is_zero; // !Y
                     3'b100: jmp_condition_met = !y_is_zero; // Y-- (before decrement)
                     3'b101: jmp_condition_met = x_not_equal_y; // X!=Y
-                    3'b110: jmp_condition_met = gpio_state[execctrl_jmp_pin]; // PIN
+                    3'b110: jmp_condition_met = gpio_state[execctrl_jmp_pin]; // branch on input PIN
                     3'b111: jmp_condition_met = !osr_below_threshold; // !OSRE
                     default: jmp_condition_met = 1'b0;
                 endcase
@@ -314,8 +314,10 @@ module pio_cu #(
                     2'b01: signal_value = gpio_state[(pinctrl_in_base + wait_index) % 32]; // PIN
                     2'b10: begin // IRQ
                         if (wait_index[4]) begin
+                            // MSB is set, state machine ID (0…3) is added to the IRQ index
                             irq_index_eval = (wait_index[2:0] + state_machine_id) % 4;
                         end else begin
+                            // 3 LSBs specify an IRQ index from 0-7
                             irq_index_eval = wait_index[2:0];
                         end
                         signal_value = irq_flags[irq_index_eval];
@@ -329,21 +331,23 @@ module pio_cu #(
             `OP_IRQ: begin
                 // IRQ wait condition logic
                 if (irq_index_field[4]) begin
+                    // MSB is set, state machine ID (0…3) is added to the IRQ index
                     irq_index_eval = (irq_index_field[2:0] + state_machine_id) % 4;
                 end else begin
+                    // 3 LSBs specify an IRQ index from 0-7
                     irq_index_eval = irq_index_field[2:0];
                 end
-            
+    
                 if (irq_wait_flag) begin
                     if (irq_clear_flag) begin
-                        // Waiting for IRQ clear operation to complete
+                        // IRQ CLEAR with WAIT: wait until IRQ is cleared
                         wait_condition_met = !irq_flags[irq_index_eval];
                     end else begin
-                        // Waiting for IRQ to be cleared by system after we set it
+                        // IRQ SET with WAIT: wait until IRQ is cleared by system
                         wait_condition_met = !irq_flags[irq_index_eval];
                     end
                 end else begin
-                    // No wait required
+                    // No wait required - condition always met
                     wait_condition_met = 1'b1;
                 end
             end
@@ -400,69 +404,111 @@ module pio_cu #(
                 end
             end
             
+            EXECUTE: begin
+                if (current_state == EXECUTE && pio_go) begin
+                    casez (opcode)
+                        `OP_WAIT: begin
+                            if (!wait_condition_met) begin
+                                next_state = WAIT_CONDITION;
+                            end else begin
+                                if (delay_value != '0) begin
+                                    next_state = DLY_S;
+                                end else begin
+                                    next_state = EXECUTE;
+                                end
+                            end
+                        end
             
-//            FETCH: begin
-//                casez (opcode)
-//                    `OP_JMP:  next_state = EXECUTE;
-//                    `OP_WAIT: next_state = WAIT_CONDITION;
-//                    `OP_OUT:  next_state = EXECUTE;
-//                    `OP_IN:   next_state = EXECUTE;
-//                    `OP_PUSH: next_state = EXECUTE;
-//                    `OP_PULL: next_state = EXECUTE;
-//                    `OP_MOV:  next_state = EXECUTE;        // MOV
-//                    `OP_IRQ:  next_state = (irq_wait_flag) ? WAIT_CONDITION : EXECUTE;
-//                    `OP_SET:  next_state = EXECUTE;        // SET																	
-//                    // Add other instructions
-//                    default: next_state = RESET; // NOP
-//                endcase
-//            end
+                        `OP_IRQ: begin
+                            if (irq_wait_flag && !wait_condition_met) begin
+                                // IRQ with WAIT flag and condition not met
+                                next_state = WAIT_CONDITION;
+                            end else begin
+                                // IRQ without WAIT or condition met
+                                if (delay_value != '0) begin
+                                    next_state = DLY_S;
+                                end else begin
+                                    next_state = EXECUTE;
+                                end
+                            end
+                        end
             
+                        // Handle other instruction cases...
+                        `OP_PUSH: begin
+                            if (push_instr && rx_fifo_full && block_flag) begin
+                                next_state = EXECUTE; // Stay until FIFO has space
+                            end else begin
+                                if (delay_value != '0) begin
+                                    next_state = DLY_S;
+                                end else begin
+                                    next_state = EXECUTE;
+                                end
+                            end
+                        end
+            
+                        `OP_PULL: begin
+                            if (pull_instr && tx_fifo_empty && block_flag) begin
+                                next_state = EXECUTE; // Stay until FIFO has data
+                            end else begin
+                                if (delay_value != '0) begin
+                                    next_state = DLY_S;
+                                end else begin
+                                    next_state = EXECUTE;
+                                end
+                            end
+                        end
+            
+                        default: begin
+                            // Normal instructions (JMP, IN, OUT, MOV, SET)
+                            if (delay_value != '0) begin
+                                next_state = DLY_S;
+                            end else begin
+                                next_state = EXECUTE;
+                            end
+                        end
+                    endcase
+                end else begin
+                    next_state = WAIT_GO;
+                end
+            end 
+                    
             // NOTE: We have to use exact three opcode bits because we aren't using
             // casez to select the instruction.
-            EXECUTE: begin
-//                    if (opcode == `OP_WAIT) begin
-                    if (wait_instr) begin
-                        next_state = WAIT_CONDITION;
-//                    end else if (opcode == `OP_IRQ) begin
-                    end else if (irq_instr) begin
-                        next_state = (irq_wait_flag) ? WAIT_CONDITION : EXECUTE;
-//                    end else if (opcode == `OP_PUSH && !rx_fifo_full) begin
-                    end else if (push_instr && !rx_fifo_full) begin
-                    // PUSH can complete
-                        if (delay_value != '0) begin
-                            next_state = DLY_S;
-                        end else begin
-                            next_state = EXECUTE;
-                        end
-//                    end else if (opcode == `OP_PUSH && rx_fifo_full && !iffull_flag) begin
-                    end else if (push_instr && rx_fifo_full && !iffull_flag) begin
-                        // PUSH blocked - stay in EXECUTE until FIFO has space
-                        next_state = EXECUTE;
-                        
-//                    end else if (opcode == `OP_PULL && !tx_fifo_empty) begin
-                    end else if (pull_instr && !tx_fifo_empty) begin
-                        // PULL can complete - TX FIFO has data
-                        if (delay_value != '0) begin
-                            next_state = DLY_S;
-                        end else begin
-                            next_state = EXECUTE;
-                        end
-//                    end else if (opcode == `OP_PULL && tx_fifo_empty && !ifempty_flag) begin
-//                    end else if (opcode == `OP_PULL && tx_fifo_empty && block_flag) begin
-                    end else if (pull_instr && tx_fifo_empty && block_flag) begin
-                        // PULL blocked - stay in EXECUTE until FIFO has data
-                        next_state = EXECUTE;															   
+//            EXECUTE: begin
+//                    if (wait_instr) begin
+//                        next_state = WAIT_CONDITION;
+//                    end else if (irq_instr) begin
+//                        next_state = (irq_wait_flag) ? WAIT_CONDITION : EXECUTE;
+//                    end else if (push_instr && !rx_fifo_full) begin
+//                    // PUSH can complete
+//                        if (delay_value != '0) begin
+//                            next_state = DLY_S;
+//                        end else begin
+//                            next_state = EXECUTE;
+//                        end
+//                    end else if (push_instr && rx_fifo_full && !iffull_flag) begin
+//                        // PUSH blocked - stay in EXECUTE until FIFO has space
+//                        next_state = EXECUTE;
+//                    end else if (pull_instr && !tx_fifo_empty) begin
+//                        // PULL can complete - TX FIFO has data
+//                        if (delay_value != '0) begin
+//                            next_state = DLY_S;
+//                        end else begin
+//                            next_state = EXECUTE;
+//                        end
+//                    end else if (pull_instr && tx_fifo_empty && block_flag) begin
+//                        // PULL blocked - stay in EXECUTE until FIFO has data
+//                        next_state = EXECUTE;															   
                     
-                    end else begin
-                        // Normal instruction completion
-                        // JMP, IN, OUT, MOV, SET
-                        if (delay_value != '0) begin
-                            next_state = DLY_S;
-                        end else begin
-                            next_state = EXECUTE;
-                        end
-                    end
-            end
+//                    end else begin
+//                        // Normal instruction completion (JMP, IN, OUT, MOV, SET)
+//                        if (delay_value != '0) begin
+//                            next_state = DLY_S;
+//                        end else begin
+//                            next_state = EXECUTE;
+//                        end
+//                    end
+//            end
 
             
             WAIT_CONDITION: begin
@@ -490,6 +536,10 @@ module pio_cu #(
     //================================================================
     // Control Signal Generation
     //================================================================
+    // Bounds checking for IRQ index
+    logic [1:0] raw_irq_index;
+    logic irq_index_valid;
+    
     always_comb begin
         logic [2:0] irq_index;
         // Default all control signals
@@ -519,14 +569,22 @@ module pio_cu #(
         irq_clear = '0;
         isr_counter_reset = 1'b0;
         osr_counter_reset = 1'b0;
-        irq_set = '0;
         computed_irq_index = '0;
         irq_waiting = 1'b0;
-	    // MOV defaults (NEW - ADD THESE LINES)
+        irq_operation_en = 1'b0;
+        irq_set_operation = 1'b0; 
+        irq_wait_for_clear = 1'b0;
+        irq_target_index = 5'b0;
+        
+	    // MOV defaults
         mov_write_en = 1'b0;
         mov_dest_sel = `MOV_DEST_X;
         mov_src_sel = `MOV_SRC_NULL;
         mov_op_sel = `MOV_OP_NONE;
+        
+        // SET control defaults
+        set_write_en = 1'b0;
+        set_dest_sel = `SET_DEST_PINS;
 
         
         // NOTE: We can use opcode definitions because we are using casez.
@@ -707,54 +765,55 @@ module pio_cu #(
                     end 
                         
                     `OP_IRQ: begin
-//                        logic [2:0] computed_irq_index;
-    
-                        // Enable IRQ operation
-                        irq_operation_en = 1'b1;
-                        irq_set_operation = !irq_clear_flag;  // 1=set, 0=clear
-                        irq_wait_for_clear = irq_wait_flag;
-    
-                        // Compute the actual IRQ index
+                        // Compute the target IRQ index (handle relative addressing)
                         if (irq_index_field[4]) begin
-                            // Relative IRQ: add state machine ID
-                            computed_irq_index = (irq_index_field[2:0] + state_machine_id) % 4;
+                            // Relative IRQ: add state machine ID to lower 3 bits
+                            raw_irq_index = irq_index_field[1:0];
+                            computed_irq_index = (raw_irq_index + state_machine_id) % 4;
+                            irq_index_valid = 1'b1; // Always valid for relative addressing
                         end else begin
-                            // Absolute IRQ
+                            // Absolute IRQ: use lower 3 bits directly
                             computed_irq_index = irq_index_field[2:0];
+                            irq_index_valid = (irq_index_field[2:0] <= `MAX_IRQ_INDEX);
                         end
-                        irq_target_index = {2'b00, computed_irq_index};
+   
+                        // Only proceed if IRQ index is valid
+                        if (irq_index_valid) begin 
+                            // Enable IRQ operation in datapath
+                            irq_operation_en = 1'b1;
+                            irq_set_operation = !irq_clear_flag;  // 1=set, 0=clear
+                            irq_wait_for_clear = irq_wait_flag;
+                            irq_target_index = {2'b00, computed_irq_index};
     
-                        // Perform IRQ operation
-                        if (irq_clear_flag) begin
-                            // Clear the specified IRQ
-                            irq_clear[computed_irq_index] = 1'b1;
-                        end else begin
-                            // Set the specified IRQ  
-                            irq_set[computed_irq_index] = 1'b1;
-                        end
-    
-                        // Handle wait logic
-                        if (irq_wait_flag) begin
-                            // If wait flag is set, check if we need to wait
-                            if (irq_clear_flag) begin
-                                // IRQ CLEAR with WAIT: wait until IRQ is actually cleared by system
-                                // This is unusual but supported
-                                irq_waiting = irq_flags[computed_irq_index];
-                            end else begin
-                                // IRQ SET with WAIT: wait until IRQ is cleared by system
-                                irq_waiting = irq_flags[computed_irq_index];
-                            end
+                            // Handle program counter advancement
+                            if (irq_wait_flag) begin
+                                // IRQ with WAIT: check if we need to wait
+                                if (irq_clear_flag) begin
+                                    // IRQ CLEAR with WAIT: wait until IRQ is actually cleared
+                                    irq_waiting = irq_flags[computed_irq_index];
+                                end else begin
+                                    // IRQ SET with WAIT: wait until IRQ is cleared by system after we set it
+                                    irq_waiting = irq_flags[computed_irq_index];
+                                end
         
-                            if (!irq_waiting) begin
-                                // Condition met, advance PC
+                                if (!irq_waiting) begin
+                                    // Condition met, advance PC
+                                    pc_write_en = 1'b1;
+                                    pc_src_sel = `PC_SRC_PLUS_ONE;
+                                end
+                                // If waiting, PC doesn't advance (handled by FSM)
+                            end else begin
+                                // IRQ without WAIT: immediate execution, advance PC
                                 pc_write_en = 1'b1;
                                 pc_src_sel = `PC_SRC_PLUS_ONE;
+                                irq_waiting = 1'b0;  // Not waiting
                             end
-                            // If waiting, PC doesn't advance (handled by FSM)
+                        
                         end else begin
-                            // No wait, always advance PC
+                            // Invalid IRQ index - treat as NOP but advance PC
                             pc_write_en = 1'b1;
                             pc_src_sel = `PC_SRC_PLUS_ONE;
+                            irq_waiting = 1'b0;
                         end
                     end  
                                       
@@ -858,6 +917,8 @@ module pio_cu #(
         end																
     end // end Control Signal Generation
     
+    
+    
     // Instruction address output
 //    assign instruction_addr = pc_current;
     
@@ -866,5 +927,9 @@ module pio_cu #(
 //    assign debug_pc = '0;
     assign debug_waiting = waiting;
     assign debug_stalled = (current_state == DLY_S) || (current_state == WAIT_CONDITION);
+    
+    // Debug signal for IRQ waiting state (ADD THIS)
+    assign debug_irq_waiting = (current_state == WAIT_CONDITION && irq_instr);
 
 endmodule
+
