@@ -35,6 +35,7 @@ module mmio_regs (
     timer_if.controller timer_bus,
     uart_if.controller  uart_bus,
     pic_mmio_if.mmio    pic_mmio_bus,  // PIC MMIO interface
+    pio_if.controller   pio_bus,       // PIO interface
     //
     input logic memorymap_range,    // memory-map access flag
     // MMIO Read Data (This is an output *to* the dmem_bus mux in the top level)
@@ -71,6 +72,12 @@ assign reg_map.pic_isr = pic_mmio_bus.isr;
 assign reg_map.uart_status.tx_fifo_avail = uart_bus.tx_fifo_avail;
 assign reg_map.uart_status.rx_fifo_prog_full = uart_bus.rx_fifo_prog_full;
 
+// PIO status
+//assign reg_map.pio_status.debug_pc = pio_bus.debug_pc;
+assign reg_map.pio_status.bootload_done = pio_bus.bootload_done;
+assign reg_map.pio_status.bootload_error = pio_bus.bootload_error;
+assign reg_map.pio_status.pio_out_pin = pio_bus.pio_out_pin;
+
 // Reserved field (always zero)
 assign reg_map.reserved_16 = 16'h0000;
 
@@ -95,6 +102,28 @@ assign pic_mmio_bus.imr        = reg_map.pic_imr;
 assign pic_mmio_bus.eoi_irq_num = reg_map.pic_eoi.irq_num;
 assign pic_mmio_bus.eoi_update = (dmem_bus.wren && memorymap_range && 
                                   dmem_bus.addr == ADDRESS_PIC_EOI);
+                                  
+// PIO interface
+assign pio_bus.pio_go = reg_map.pio_ctrl.pio_go;
+assign pio_bus.state_machine_id = reg_map.pio_ctrl.state_machine_id;
+//assign pio_bus.pio_reset = reg_map.pio_ctrl.pio_reset;                          // TODO: check this???
+assign pio_bus.program_select = reg_map.pio_ctrl.program_select;
+assign pio_bus.bootload_start = reg_map.pio_ctrl.bootload_start;
+assign pio_bus.pinctrl_in_base = reg_map.pio_pinctrl.pinctrl_in_base;
+assign pio_bus.pinctrl_out_base = reg_map.pio_pinctrl.pinctrl_out_base;
+assign pio_bus.pinctrl_out_count = reg_map.pio_pinctrl.pinctrl_out_count;
+assign pio_bus.shiftctrl_pull_thresh = reg_map.pio_shiftctrl.shiftctrl_pull_thresh;
+assign pio_bus.shiftctrl_push_thresh = reg_map.pio_shiftctrl.shiftctrl_push_thresh;
+assign pio_bus.shiftctrl_autopull_thresh = reg_map.pio_shiftctrl.shiftctrl_autopull_thresh;
+assign pio_bus.shiftctrl_out_shiftdir = reg_map.pio_shiftctrl.shiftctrl_out_shiftdir;
+assign pio_bus.execctrl_jmp_pin = reg_map.pio_execctrl.execctrl_jmp_pin;
+assign pio_bus.shiftctrl_in_count = reg_map.pio_execctrl.shiftctrl_in_count;
+assign pio_bus.shiftctrl_in_shiftdir = reg_map.pio_execctrl.shiftctrl_in_shiftdir;
+assign pio_bus.shiftctrl_autopush_en = reg_map.pio_execctrl.shiftctrl_autopush_en;
+assign pio_bus.shiftctrl_autopush_thresh = reg_map.pio_execctrl.shiftctrl_autopush_thresh;
+
+// imem_write_en, imem_write_addr, imem_write_data: these signals not used
+// assign pio_bus.imem_write_en = 1'b0;              
 
 // GPIO 
 assign led_ctrl_o            = reg_map.led_ctrl;
@@ -121,11 +150,21 @@ always_ff @(posedge clk or negedge rst_n) begin
         reg_map.pic_imr        <= 16'hFFFE; // Safe default: allow interrupts 0 and 1
         reg_map.pic_eoi        <= '0;
         reg_map.led_ctrl       <= '0;
+        reg_map.pio_ctrl       <= '0;
+//        reg_map.pio_ctrl       <= 16'h0100;
+        reg_map.pio_pinctrl    <= '0;
+        reg_map.pio_shiftctrl  <= '0;
+        reg_map.pio_execctrl   <= '0;
+        reg_map.pio_tx_fifo    <= '0;
+        reg_map.pio_instr      <= '0;
     end else begin
         // Auto-clear control bits
-        if (reg_map.timer_ctrl.reset)    reg_map.timer_ctrl.reset    <= 1'b0;
-        if (reg_map.uart_ctrl.tx_start)  reg_map.uart_ctrl.tx_start  <= 1'b0;
-        if (reg_map.uart_ctrl.reset_flags) reg_map.uart_ctrl.reset_flags <= 1'b0;
+        if (reg_map.timer_ctrl.reset)        reg_map.timer_ctrl.reset      <= 1'b0;
+        if (reg_map.uart_ctrl.tx_start)      reg_map.uart_ctrl.tx_start    <= 1'b0;
+        if (reg_map.uart_ctrl.reset_flags)   reg_map.uart_ctrl.reset_flags <= 1'b0;
+        // PIO
+        if (reg_map.pio_ctrl.pio_reset) reg_map.pio_ctrl.pio_reset  <= 1'b0;
+        if (reg_map.pio_ctrl.bootload_start) reg_map.pio_ctrl.bootload_start  <= 1'b0;
         
         // Handle register writes using the dmem_bus interface
         if (dmem_bus.wren && memorymap_range && !is_read_only(dmem_bus.addr)) begin
@@ -138,7 +177,14 @@ always_ff @(posedge clk or negedge rst_n) begin
                 ADDRESS_UART_TX_DATA:   reg_map.uart_tx_data   <= dmem_bus.wdata;
                 ADDRESS_PIC_IMR:        reg_map.pic_imr        <= dmem_bus.wdata;
                 ADDRESS_PIC_EOI:        reg_map.pic_eoi        <= dmem_bus.wdata; 
-                ADDRESS_LED_CTRL:       reg_map.led_ctrl       <= dmem_bus.wdata;                
+                ADDRESS_LED_CTRL:       reg_map.led_ctrl       <= dmem_bus.wdata;
+                // PIO
+                ADDRESS_PIO_CTRL:       reg_map.pio_ctrl       <= dmem_bus.wdata;
+                ADDRESS_PIO_PINCTRL:    reg_map.pio_pinctrl    <= dmem_bus.wdata;
+                ADDRESS_PIO_SHIFTCTRL:  reg_map.pio_shiftctrl  <= dmem_bus.wdata;
+                ADDRESS_PIO_EXECCTRL:   reg_map.pio_execctrl   <= dmem_bus.wdata;
+                ADDRESS_PIO_TX_FIFO:    reg_map.pio_tx_fifo    <= dmem_bus.wdata;
+                ADDRESS_PIO_INSTR:      reg_map.pio_instr      <= dmem_bus.wdata;                             
                 default:                ;
             endcase
         end
@@ -159,6 +205,7 @@ always_ff @(posedge clk or negedge rst_n) begin
         reg_map.uart_status.rx_data_avail <= 1'b0;
         reg_map.uart_status.rx_error <= 1'b0;
         reg_map.uart_status.reserved <= 12'b0;
+        reg_map.pio_status.reserved <= '0;
         reg_map.uart_rx_data <= '0;
     end else begin
         // Latch timeout and overflow flags when they occur
@@ -230,6 +277,14 @@ always_ff @(posedge clk or negedge rst_n) begin
                 ADDRESS_PIC_IMR:        mmio_rd_data_o <= reg_map.pic_imr;
                 ADDRESS_PIC_ISR:        mmio_rd_data_o <= reg_map.pic_isr;  // Wire assignment
                 // Note: PIC_EOI is write-only, no read case needed
+                
+                // PIO
+                ADDRESS_PIO_CTRL:       mmio_rd_data_o <= reg_map.pio_ctrl;
+                ADDRESS_PIO_PINCTRL:    mmio_rd_data_o <= reg_map.pio_pinctrl;
+                ADDRESS_PIO_SHIFTCTRL:  mmio_rd_data_o <= reg_map.pio_shiftctrl;
+                ADDRESS_PIO_EXECCTRL:   mmio_rd_data_o <= reg_map.pio_execctrl;
+                ADDRESS_PIO_RX_FIFO:    mmio_rd_data_o <= reg_map.pio_rx_fifo;
+                ADDRESS_PIO_STATUS:     mmio_rd_data_o <= reg_map.pio_status;                
                 
                 // LED and System Control
                 ADDRESS_LED_CTRL:       mmio_rd_data_o <= reg_map.led_ctrl;
