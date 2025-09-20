@@ -15,6 +15,7 @@
 // Memory-mapped functionality has been extracted into a separate core_regs module.
 //
 // Revision:
+// Revision 1.7 - PIO added to abCore16
 // Revision 1.7 - Moved CPU memory and core to cpu_system.sv
 // Revision 1.6 - Multiple interrupts (Timer & UART) work
 // Revision 1.5 - Fixed multiple driver issues by using continuous assignments
@@ -55,7 +56,11 @@ module cpu_tl (
     // UART
     output logic                   uart_tx_o,
     input  logic                   uart_rx_i,
-    input  logic                   tx_trigger_btn_i, // From a push-button to send a test byte 
+    input  logic                   tx_trigger_btn_i, // From a push-button
+    // PIO GPIO Interface (NEW - ADD THESE PORTS)
+//    input  logic [31:0]            pio_gpio_in_i,
+//    output logic [31:0]            pio_gpio_out_o,
+
     // CPU halt flag
     output logic                   halted_o,
     output logic                   led2_o,
@@ -98,6 +103,17 @@ logic int0_timeout;
 logic int1_timeout;
 logic int2_timeout;
 logic int1_uartrx;
+
+// PIO
+logic [31:0]  pio_gpio_in_i;
+logic [31:0]  pio_gpio_out_o;
+logic         pio_irq_o;
+logic [31:0]  pio_gpio_dir_o;
+
+logic         pio_bootload_done;
+logic         pio_bootload_error; 
+logic [7:0]   irq_clear_cu;
+logic [35:0]  dbg_bus_pio;
 
 // To reduce pin count for development board assign gpio_in_i here.
 logic [`DATA_WIDTH-1:0] gpio_in_i;
@@ -145,6 +161,8 @@ pic_mmio_if pic_mmio_bus ( .clk(clk), .rst_n(rst_n) );   // PIC to MMIO signals
 // --- CPU Bus Interfaces ---
 dmem_bus_if dmem_mmio_bus ( .clk(clk), .rst_n(rst_n) );
 gpio_bus_if gpio_wr_bus ( .clk(clk), .rst_n(rst_n) );
+// --- PIO Interface (NEW - ADD THIS LINE) ---
+pio_if pio_bus ( .clk(clk), .rst_n(rst_n) );
 
 //================================================================
 // Top-Level Port Connections and Logic
@@ -170,51 +188,51 @@ assign gpio_out_we_o = gpio_wr_bus.wren;
 //================================================================
 // Module Instantiations
 //================================================================
-// --- abCore16 microprocessor core ---
+// --- abCore16 microprocessor core plus memory ---
 // There are three microprocessor interfaces defined: 
 // 1) instruction memory  (access instructions from memory)
 // 2) data memory (access both data and memory-mapped IO)
 // 3) GPIO bus (GPIO bus used for print instruction)
 cpu_system cpu_system01 (
-    .clk        (clk),
-    .rst_n      (rst_n),
-    // External interfaces to peripherals/system
-    .dmem_mmio_bus  (dmem_mmio_bus.mmio_writer),          // For MMIO access
-    .gpio_wr_bus    (gpio_wr_bus.gpio_writer),          // GPIO interface
-    // PIC interfaces
-    .pic_cpu_bus  (pic_cpu_bus.cpu),         // CPU-PIC interface  
+    .clk               (clk),
+    .rst_n             (rst_n),
+    // Interfaces to peripherals/system
+    .dmem_mmio_bus     (dmem_mmio_bus.mmio_writer),    // For MMIO access
+    .gpio_wr_bus       (gpio_wr_bus.gpio_writer),      // GPIO interface
+    .pic_cpu_bus       (pic_cpu_bus.cpu),              // CPU-PIC interface  
     // Direct connections
     .mmio_rd_data_i    (mmio_rd_data),
     .enable_int_o      (enable_int),
     .memorymap_range_o (memorymap_range),
     // Debug outputs
-    .dbg_bus_cu     (dbg_bus_cu),  // output logic [20:0] 
-    .dbg_bus_dp     (dbg_bus_dp),  // output logic [21:0] 
+    .dbg_bus_cu        (dbg_bus_cu),                   // [20:0] 
+    .dbg_bus_dp        (dbg_bus_dp),                   // [21:0] 
     // Status outputs
-    .halted_o       (halted_o)
+    .halted_o          (halted_o)
 );
 
 // --- Memory-mapped IO Registers ---
 // Use CPU data bus to access memory-mapped registers.
 mmio_regs mmio_regs01 (
-    .clk                    (clk),
-    .rst_n                  (rst_n),
-    .dmem_bus               (dmem_mmio_bus.mmio_reader),      // CHANGED: New modport
-    .timer_bus              (timer_bus.controller),     // timer interface
-    .uart_bus               (uart_bus.controller),      // uart interface
-    .pic_mmio_bus           (pic_mmio_bus.mmio),         // CHANGED: New PIC interface
-    .memorymap_range        (memorymap_range),
-    .mmio_rd_data_o         (mmio_rd_data),
-    .mmio_rd_valid_o        (mmio_rd_valid),
-    .uart_rx_access_o       (uart_rx_access),
+    .clk               (clk),
+    .rst_n             (rst_n),
+    .dmem_bus          (dmem_mmio_bus.mmio_reader),      // CHANGED: New modport
+    .timer_bus         (timer_bus.controller),     // timer interface
+    .uart_bus          (uart_bus.controller),      // uart interface
+    .pic_mmio_bus      (pic_mmio_bus.mmio),         // CHANGED: New PIC interface
+    .pio_bus           (pio_bus.controller),        // NEW - ADD THIS LINE
+    .memorymap_range   (memorymap_range),
+    .mmio_rd_data_o    (mmio_rd_data),
+    .mmio_rd_valid_o   (mmio_rd_valid),
+    .uart_rx_access_o  (uart_rx_access),
     // REMOVED: .eoi_update_o (eoi_update),               // Now part of pic_mmio_bus
-    .led_ctrl_o             (led_ctrl)
+    .led_ctrl_o        (led_ctrl)
 );
 
 // --- Timer Module Instantiation ---
 timer timer01 (
     // Connect the peripheral side of the interface
-    .timer_bus(timer_bus.peripheral)    // timer interface
+    .timer_bus         (timer_bus.peripheral)    // timer interface
 );
 
 
@@ -233,7 +251,7 @@ uart_mn #(
     .i_uart_rx         (uart_rx_sync)
 );
 
-// --- UART Manual Trigger using pushbutton ---
+// UART Manual Trigger using pushbutton
 // Sync and edge detector for the button press to create a single-cycle 
 // start pulse. Used to test UART.
 logic [2:0] tx_trig_shft;
@@ -247,6 +265,18 @@ always_ff @(posedge clk or negedge rst_n) begin
         tx_start_btn <= tx_trig_shft[2:1] == 2'b01;
     end
 end
+
+
+// --- UART Module Instantiation ---
+pic pic01 (
+    .clk             (clk),
+    .rst_n           (rst_n),
+    .pic_cpu_bus     (pic_cpu_bus.pic),      // CPU interface
+    .pic_mmio_bus    (pic_mmio_bus.pic),     // MMIO interface  
+    .enable_int_i    (enable_int),           
+    .irq_i           (device_irqs),          // Direct connection
+    .dbg_bus_pic     (dbg_bus_pic)     
+);
 
 // Assign interrupts to PIC
 assign int0_timeout = timer_bus.timeout;
@@ -264,19 +294,12 @@ always_ff@(posedge clk) begin
    end
 end
 
-assign device_irqs = {14'h0, int1_uartrx, int0_timeout};
-
-pic pic01 (
-    .clk             (clk),
-    .rst_n           (rst_n),
-    .pic_cpu_bus     (pic_cpu_bus.pic),      // CPU interface
-    .pic_mmio_bus    (pic_mmio_bus.pic),     // MMIO interface  
-    .enable_int_i    (enable_int),           
-    .irq_i           (device_irqs),          // Direct connection
-    .dbg_bus_pic     (dbg_bus_pic)     
-);
-
-
+//assign device_irqs = {14'h0, int1_uartrx, int0_timeout};
+// Device IRQs
+assign device_irqs[0] = int0_timeout;
+assign device_irqs[1] = int1_uartrx;
+assign device_irqs[2] = pio_irq_o;              // NEW - ADD PIO IRQ
+assign device_irqs[15:3] = '0;                  // Unused IRQs
 
 // Int 1 Shifter
 logic [15:0] int00_shft;
@@ -291,6 +314,87 @@ end
 // create a delayed versions of int0_timeout
 assign int1_timeout = int00_shft[15];  // Int#1
 assign int2_timeout = int00_shft[5];  // Int#2
+
+//================================================================
+// Programmable Input/Output (PIO) Instance
+//================================================================  
+//logic pio_bootload_done;
+//logic pio_bootload_error; 
+//logic [7:0] irq_clear_cu;
+pio_tl pio01 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .pio_go(pio_bus.pio_go),
+        
+    // GPIO interface
+    .gpio_in(pio_gpio_in_i),
+    .gpio_out( pio_gpio_out_o),
+    .gpio_dir(pio_gpio_dir_o),
+        
+    // Configuration from interface
+    .execctrl_jmp_pin(pio_bus.execctrl_jmp_pin),
+    .shiftctrl_pull_thresh(pio_bus.shiftctrl_pull_thresh),
+    .shiftctrl_push_thresh(pio_bus.shiftctrl_push_thresh),
+    .autopush_enable(pio_bus.autopush_enable),
+    .autopull_enable(pio_bus.autopull_enable),
+    .pinctrl_in_base(pio_bus.pinctrl_in_base),
+    .pinctrl_out_base(pio_bus.pinctrl_out_base),
+    .pinctrl_out_count(pio_bus.pinctrl_out_count),
+    .state_machine_id(pio_bus.state_machine_id),
+    .bootload_start(pio_bus.bootload_start),
+    .program_select(pio_bus.program_select),
+    .bootload_done(pio_bootload_done),
+    .bootload_error(pio_bootload_error),
+        
+    // Instruction memory programming
+//    .imem_write_en(pio_bus.imem_write_en),
+//    .imem_write_addr(pio_bus.imem_write_addr),
+//    .imem_write_data(pio_bus.imem_write_data),
+        
+    // FIFO interfaces
+    .tx_fifo_wr_data(pio_bus.tx_fifo_wr_data),
+    .tx_fifo_wren(pio_bus.tx_fifo_wren),
+    .tx_fifo_full(pio_bus.tx_fifo_full),
+    .rx_fifo_rden(pio_bus.rx_fifo_rden),
+    .rx_fifo_datout(pio_bus.rx_fifo_datout),
+    .rx_fifo_mt(pio_bus.rx_fifo_mt),
+        
+     // IRQ interface
+    .irq_flags_in(pio_bus.irq_flags_in),
+    .irq_flags_clear(pio_bus.irq_flags_clear),      // TODO: clear irq??
+    .irq_clear_cu(irq_clear_cu),                    // TODO: clear irq??
+    .irq_flags_set(pio_bus.irq_flags_set),
+        
+    // Additional shift control signals
+    .shiftctrl_in_count(pio_bus.shiftctrl_in_count),
+    .shiftctrl_in_shiftdir(pio_bus.shiftctrl_in_shiftdir),
+    .shiftctrl_autopush_en(pio_bus.shiftctrl_autopush_en),
+    .shiftctrl_autopush_thresh(pio_bus.shiftctrl_autopush_thresh),
+    .shiftctrl_autopull_en(pio_bus.shiftctrl_autopull_en),
+    .shiftctrl_autopull_thresh(pio_bus.shiftctrl_autopull_thresh),
+    .shiftctrl_out_shiftdir(pio_bus.shiftctrl_out_shiftdir),
+        
+    // Debug outputs
+ //   .debug_pc(pio_bus.debug_pc),
+    .dbg_bus_pio(dbg_bus_pio),
+    .debug_waiting(pio_bus.debug_waiting)
+);
+
+assign pio_bus.bootload_done = pio_bootload_done;
+assign pio_bus.bootload_error = pio_bootload_error;
+
+// FOR now, PIO pin assignments
+logic pio_out_pin;
+assign pio_gpio_in_i = 32'ha10b_ae2a;                 // TODO: assign to real pins
+assign pio_out_pin = |pio_gpio_out_o;
+assign pio_bus.pio_out_pin = pio_out_pin;
+  
+// IRQ generation
+assign pio_irq_o = |pio_bus.irq_flags_set;   // irq 0-7 ORed
+    
+// Connect instruction write request
+assign instr_write_req = pio_bus.tx_fifo_wren; // Reuse TX FIFO write for instruction programming
+    
     
 //================================================================
 // LED Control Logic
@@ -344,15 +448,22 @@ end
 //logic [20:0] dbg_bus_cu;      // 21 signals
 //logic [21:0] dbg_bus_dp;      // 22 signals 
 //                                 104 signals
+// logic [35:0]  dbg_bus_pio;   // 36
+// 21 + 22 + 36 = 79
+// Total: 79 + 3 = 82
 //--- ILA_0  ---
-logic [107:0] probe0;
+//logic [107:0] probe0;
+logic [81:0] probe0;
 // The ILA probe uses the dmem_mmio_bus interface signals
 //assign probe0[31:0] = { dmem_mmio_bus.addr[8:0], uart_bus.rx_data, uart_bus.tx_data, uart_tx_o, uart_rx_sync, 
 //                        uart_bus.tx_start, 1'b0, uart_bus.rx_fifo_avail,
 //                        dmem_mmio_bus.wren, led3_o };
 
+//assign probe0 = { led3_o, uart_bus.tx_start, uart_bus.rx_fifo_avail, dmem_mmio_bus.wren,
+//                  dbg_bus_pic, dbg_bus_cu, dbg_bus_dp };
+                  
 assign probe0 = { led3_o, uart_bus.tx_start, uart_bus.rx_fifo_avail, dmem_mmio_bus.wren,
-                  dbg_bus_pic, dbg_bus_cu, dbg_bus_dp };
+                  dbg_bus_pio, dbg_bus_cu, dbg_bus_dp };
 
 // Debug logic analyzer
 ila_0 ab_ILA (
