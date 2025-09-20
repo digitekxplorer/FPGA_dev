@@ -184,8 +184,92 @@ interface uart_if (input logic clk, input logic rst_n);
         input clk, rst_n, tx_data, tx_start, reset_flags,
         output tx_fifo_avail, rx_data, rx_fifo_avail, rx_frame_error, rx_fifo_prog_full
     );
+endinterface
 
+// ***********************************
+// ***********************************
+// --- PIO Interface ---
+interface pio_if (
+    input logic clk,
+    input logic rst_n
+);
+    // Configuration signals
+    logic        pio_go;
+    logic [1:0]  state_machine_id;
+    logic        bootload_start;
+    logic [3:0]  program_select;
+    logic [4:0]  execctrl_jmp_pin;
+    logic [4:0]  shiftctrl_pull_thresh;
+    logic [4:0]  shiftctrl_push_thresh;
+    logic        autopush_enable;
+    logic        autopull_enable;
+    logic [4:0]  pinctrl_in_base;
+    logic [4:0]  pinctrl_out_base;
+    logic [4:0]  pinctrl_out_count;
+    logic [4:0]  shiftctrl_in_count;
+    logic        shiftctrl_in_shiftdir;
+    logic        shiftctrl_autopush_en;
+    logic [4:0]  shiftctrl_autopush_thresh;
+    logic        shiftctrl_autopull_en;
+    logic [4:0]  shiftctrl_autopull_thresh;
+    logic        shiftctrl_out_shiftdir;
+    
+    // Instruction programming
+//    logic        imem_write_en;
+//    logic [4:0]  imem_write_addr;
+//    logic [15:0] imem_write_data;
+    
+    // FIFO interfaces
+    logic [31:0] tx_fifo_wr_data;
+    logic        tx_fifo_wren;
+    logic        tx_fifo_full;
+    logic        rx_fifo_rden;
+    logic [31:0] rx_fifo_datout;
+    logic        rx_fifo_mt;
+    
+    // IRQ interface
+    logic [7:0]  irq_flags_in;
+    logic [7:0]  irq_flags_clear;
+    logic [7:0]  irq_flags_set;
+    
+    // Status/Debug
+    logic        bootload_done;
+    logic        bootload_error;
+    logic        pio_out_pin;         // used as PIO output pins status
+//    logic [4:0]  debug_pc;
+    logic        debug_waiting;
+    
+    modport controller (
+        output pio_go, state_machine_id, bootload_start, program_select,
+               execctrl_jmp_pin, shiftctrl_pull_thresh,
+               shiftctrl_push_thresh, autopush_enable, autopull_enable,
+               pinctrl_in_base, pinctrl_out_base, pinctrl_out_count,
+               shiftctrl_in_count, shiftctrl_in_shiftdir, shiftctrl_autopush_en,
+               shiftctrl_autopush_thresh, shiftctrl_autopull_en, 
+               shiftctrl_autopull_thresh, shiftctrl_out_shiftdir,
+//               imem_write_en, imem_write_addr, imem_write_data,
+               tx_fifo_wr_data, tx_fifo_wren, rx_fifo_rden, irq_flags_in,
+        input  tx_fifo_full, rx_fifo_datout, rx_fifo_mt, irq_flags_clear,
+//               irq_flags_set, debug_pc, debug_waiting
+               irq_flags_set, bootload_done, bootload_error, pio_out_pin, debug_waiting
+    );
+    
+    modport peripheral (
+        input  pio_go, state_machine_id, bootload_start, program_select,
+               execctrl_jmp_pin, shiftctrl_pull_thresh,
+               shiftctrl_push_thresh, autopush_enable, autopull_enable,
+               pinctrl_in_base, pinctrl_out_base, pinctrl_out_count,
+               shiftctrl_in_count, shiftctrl_in_shiftdir, shiftctrl_autopush_en,
+               shiftctrl_autopush_thresh, shiftctrl_autopull_en, 
+               shiftctrl_autopull_thresh, shiftctrl_out_shiftdir,
+//               imem_write_en, imem_write_addr, imem_write_data,
+               tx_fifo_wr_data, tx_fifo_wren, rx_fifo_rden, irq_flags_in,
+        output tx_fifo_full, rx_fifo_datout, rx_fifo_mt, irq_flags_clear,
+ //              irq_flags_set, debug_pc, debug_waiting
+               irq_flags_set, bootload_done, bootload_error, pio_out_pin, debug_waiting
+    );
     
 endinterface
+
 
 `endif // ABCORE_INTERFACES_SV
