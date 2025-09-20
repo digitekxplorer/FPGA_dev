@@ -50,8 +50,9 @@ import mmio_reg_pkg::*;
 //`define IMEM_HEX_FILE "test_char.hex"  // test char data type
 //`define IMEM_HEX_FILE "test_loadb_storb.hex"  // Test byte instructions
 //`define IMEM_HEX_FILE "test_loadbfr_storbfr.hex"  // Test byte instructions, frame relative
-`define IMEM_HEX_FILE "test_uart.hex"  // UART at 115,200 baud
+//`define IMEM_HEX_FILE "test_uart.hex"  // UART at 115,200 baud
 //`define IMEM_HEX_FILE "test_interrupt.hex"   // Interrupt testing
+`define IMEM_HEX_FILE "test_pio.hex"  // First PIO example; configure PIO
 
 
 module cpu_system (
@@ -232,9 +233,14 @@ assign dmem_word_addr = dmem_internal_bus.addr >> 1;
     );
 `endif
 
-// ================
+
+//================================================================
+// Byte Access Logic: Read-Modify-Write
+//================================================================
+
+// ****************
 // Byte Write Logic
-// ================
+// ****************
 logic    dmem_byt_wrflg_r;
 logic    dmem_addr_lsb_r;
 logic    dmem_addr_lsb_2r;
@@ -290,9 +296,7 @@ always_ff@(posedge clk) begin
    end
 end
 
-//================================================================
-// Byte Access Logic: Read-Modify-Write
-//================================================================
+
 // **********
 // Write FSM
 // **********
