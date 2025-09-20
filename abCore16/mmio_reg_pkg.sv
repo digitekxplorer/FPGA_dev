@@ -77,6 +77,61 @@ package mmio_reg_pkg;
     logic        sys_int_en;    // system level enabled: 0=off; 1=on
   } sys_ctrl_t;
   
+  // --- PIO Control Registers ---
+  // PIO Control Register (0x1830)
+  typedef struct packed {
+    logic [6:0]  reserved;          // Reserved [15:9]
+    logic        bootload_start;    // Start bootloader [8] (auto-clear)
+    logic [3:0]  program_select;    // Program selection [7:4]
+    logic        pio_reset;         // PIO reset (self-clearing) [3]
+    logic [1:0]  state_machine_id;  // State machine ID [2:1]
+    logic        pio_go;            // PIO enable/start [0]
+  } pio_ctrl_t;
+  
+  // PIO Pin Control Register (0x1832)  
+  typedef struct packed {
+    logic        reserved_15;       // Reserved [15]
+    logic [4:0]  pinctrl_out_count; // Output pin count [14:10]
+    logic [4:0]  pinctrl_out_base;  // Output pin base [9:5]
+    logic [4:0]  pinctrl_in_base;   // Input pin base [4:0]
+  } pio_pinctrl_t;
+
+  // PIO Shift Control Register (0x1834)
+  typedef struct packed {
+    logic        shiftctrl_out_shiftdir; // Output shift direction [15]
+    logic [4:0]  shiftctrl_autopull_thresh; // Auto-pull threshold [14:10]
+    logic [4:0]  shiftctrl_push_thresh;  // Push threshold [9:5]
+    logic [4:0]  shiftctrl_pull_thresh;  // Pull threshold [4:0]
+  } pio_shiftctrl_t;
+
+  // PIO Execution Control Register (0x1836)
+  typedef struct packed {
+    logic [3:0]  shiftctrl_autopush_thresh; // Auto-push threshold [15:12]
+    logic        shiftctrl_autopush_en;     // Auto-push enable [11]
+    logic        shiftctrl_in_shiftdir;     // Input shift direction [10]
+    logic [4:0]  shiftctrl_in_count;       // Input count [9:5]
+    logic [4:0]  execctrl_jmp_pin;         // Jump pin [4:0]
+  } pio_execctrl_t;
+
+  // PIO FIFO Data Registers (0x1838 => TX, 0x183A => RX)
+  typedef struct packed {
+    logic [15:0] data;              // FIFO data [15:0]
+  } pio_fifo_data_t;
+
+  // PIO Instruction Programming Register (0x183C)
+  typedef struct packed {
+    logic [15:0] instruction;       // 16-bit instruction [15:0]
+  } pio_instr_t;
+
+  // PIO Status Register (0x183E)                               // TODO: added status
+  typedef struct packed {
+    logic [12:0] reserved;          // Reserved [15:3]
+//    logic [4:0]  debug_pc;          // Current PC [4:0]
+    logic pio_out_pin;            // used as PIO output pins status
+    logic bootload_error;         // PIO instruction transfer error
+    logic bootload_done;          // PIO instruction transfer to PIO imem done
+  } pio_status_t;
+  
   // --- Complete Register Map Structure ---
   // Memory-mapped base address = 0x1800
   typedef struct packed {
@@ -112,6 +167,17 @@ package mmio_reg_pkg;
     uart_data_t     uart_rx_data;    // 0x1E
     led_ctrl_t      led_ctrl;        // 0x20
     sys_ctrl_t      sys_ctrl;        // 0x22
+    
+    // PIO Registers (0x30 - 0x3E)
+    pio_ctrl_t      pio_ctrl;         // 0x30
+    pio_pinctrl_t   pio_pinctrl;      // 0x32
+    pio_shiftctrl_t pio_shiftctrl;    // 0x34
+    pio_execctrl_t  pio_execctrl;     // 0x36
+    pio_fifo_data_t pio_tx_fifo;      // 0x38
+    pio_fifo_data_t pio_rx_fifo;      // 0x3A
+    pio_instr_t     pio_instr;        // 0x3C
+    pio_status_t    pio_status;       // 0x3E
+    
   } register_map_t;
   
   
@@ -125,7 +191,7 @@ package mmio_reg_pkg;
   localparam ADDRESS_PIC_IRR         = MMIO_ADDRESS_BASE + 16'h0000;
   localparam ADDRESS_PIC_IMR         = MMIO_ADDRESS_BASE + 16'h0002;
   localparam ADDRESS_PIC_ISR         = MMIO_ADDRESS_BASE + 16'h0004;
-  localparam ADDRESS_PIC_EOI         = MMIO_ADDRESS_BASE + 16'h0006;  // TODO: do we need this
+  localparam ADDRESS_PIC_EOI         = MMIO_ADDRESS_BASE + 16'h0006;
 
   // Timer Addresses
   localparam ADDRESS_TIMER_CTRL      = MMIO_ADDRESS_BASE + 16'h0008;
@@ -143,6 +209,16 @@ package mmio_reg_pkg;
   localparam ADDRESS_UART_RX_DATA    = MMIO_ADDRESS_BASE + 16'h001E;
   localparam ADDRESS_LED_CTRL        = MMIO_ADDRESS_BASE + 16'h0020;
   localparam ADDRESS_SYSTEM_CTRL     = MMIO_ADDRESS_BASE + 16'h0022;
+  
+  // PIO Addresses
+  localparam ADDRESS_PIO_CTRL        = MMIO_ADDRESS_BASE + 16'h0030;    // PIO Control Register
+  localparam ADDRESS_PIO_PINCTRL     = MMIO_ADDRESS_BASE + 16'h0032;    // PIO Pin Control Register  
+  localparam ADDRESS_PIO_SHIFTCTRL   = MMIO_ADDRESS_BASE + 16'h0034;    // PIO Shift Control Register
+  localparam ADDRESS_PIO_EXECCTRL    = MMIO_ADDRESS_BASE + 16'h0036;    // PIO Execution Control Register
+  localparam ADDRESS_PIO_TX_FIFO     = MMIO_ADDRESS_BASE + 16'h0038;    // PIO TX FIFO Data Register
+  localparam ADDRESS_PIO_RX_FIFO     = MMIO_ADDRESS_BASE + 16'h003A;    // PIO RX FIFO Data Register
+  localparam ADDRESS_PIO_INSTR       = MMIO_ADDRESS_BASE + 16'h003C;    // PIO Instruction Programming Register
+  localparam ADDRESS_PIO_STATUS      = MMIO_ADDRESS_BASE + 16'h003E;    // PIO Status Register
   
   // *********************
   // Register Parameters
