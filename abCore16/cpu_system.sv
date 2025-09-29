@@ -25,8 +25,8 @@ import mmio_reg_pkg::*;
 `include "abcore_interfaces.sv"
 
 // For Synthesis, comment out both defines
-//`define MEMORYMODELSIM    // use hex file
-//`define SIMSPEEDUPCLK     // use Testbench 12MHz clock
+`define MEMORYMODELSIM    // use hex file
+`define SIMSPEEDUPCLK     // use Testbench 12MHz clock
 
 // --- FOR SIMULATION: Use a fast, behavioral memory model ---
 // Remember: Must add new coe and hex files to abCore16 project as Coefficient 
