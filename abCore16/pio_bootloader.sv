@@ -68,6 +68,8 @@ module pio_bootloader (
             current_imem_addr <= 5'b0;
             bram_read_en <= 1'b0;
             imem_write_en <= 1'b0;
+            imem_write_addr <= '0;
+            imem_write_data <= '0;
             bootload_done <= 1'b0;
             bootload_error <= 1'b0;
             pio_header_sav <= 1'b0;
