@@ -120,21 +120,16 @@ module pio_cu #(
     // SET Control
     output logic        set_write_en,
     output logic [2:0]  set_dest_sel,   // 3 bits for destination
-//    output logic [4:0]  set_data_value,
     
     // IRQ Control
     output logic        irq_operation_en,
     output logic        irq_set_operation,
     output logic        irq_wait_for_clear,
     output logic [4:0]  irq_target_index,
-//    output logic [7:0]  irq_set,        // Set IRQ flags
     
     // FIFO Control
     output logic        tx_fifo_read,
     output logic        rx_fifo_write,
-    
-    // IRQ Control
-    output logic [7:0]  irq_clear,
     
     // Debug
 //    output logic [ADDR_WIDTH-1:0] debug_pc,
@@ -190,9 +185,6 @@ module pio_cu #(
     logic        irq_clear_flag;    // IRQ clear flag
     logic        irq_wait_flag;     // IRQ wait flag  
     logic [4:0]  irq_index_field;   // IRQ index field
-    
-    // IRQ control signals
-    logic        irq_waiting;          // Currently waiting for IRQ clear
     
     // Debug: instructions
     logic jmp_instr;
@@ -336,10 +328,13 @@ module pio_cu #(
     
                 if (irq_wait_flag) begin
                     if (irq_clear_flag) begin
-                        // IRQ CLEAR with WAIT: wait until IRQ is cleared
+                        // IRQ CLEAR with WAIT: Clear flag and wait for confirmation
+                        // Waits until flag is cleared (immediately true if already clear)
+                        // Note: This is rarely used in practice
                         wait_condition_met = !irq_flags[irq_index_eval];
                     end else begin
-                        // IRQ SET with WAIT: wait until IRQ is cleared by system
+                        // IRQ SET with WAIT: Set flag and wait for system to clear it
+                        // Common use case for CPU-PIO synchronization
                         wait_condition_met = !irq_flags[irq_index_eval];
                     end
                 end else begin
@@ -416,11 +411,11 @@ module pio_cu #(
                         end
             
                         `OC_IRQ: begin
-                            if (irq_wait_flag && !wait_condition_met) begin
-                                // IRQ with WAIT flag and condition not met
+                            if (irq_wait_flag) begin
+                                // IRQ with WAIT flag - transition to WAIT_CONDITION
                                 next_state = WAIT_CONDITION;
                             end else begin
-                                // IRQ without WAIT or condition met
+                                // IRQ without WAIT - handle delay or continue
                                 if (delay_value != '0) begin
                                     next_state = DLY_S;
                                 end else begin
@@ -562,11 +557,9 @@ module pio_cu #(
         gpio_src_sel = `GPIO_SRC_OSR;
         tx_fifo_read = 1'b0;
         rx_fifo_write = 1'b0;
-        irq_clear = '0;
         isr_counter_reset = 1'b0;
         osr_counter_reset = 1'b0;
         computed_irq_index = '0;
-        irq_waiting = 1'b0;
         irq_operation_en = 1'b0;
         irq_set_operation = 1'b0; 
         irq_wait_for_clear = 1'b0;
@@ -763,7 +756,7 @@ module pio_cu #(
                     `OC_IRQ: begin
                         // Compute the target IRQ index (handle relative addressing)
                         if (irq_index_field[4]) begin
-                            // Relative IRQ: add state machine ID to lower 3 bits
+                            // Relative IRQ: add state machine ID to lower 2 bits
                             raw_irq_index = irq_index_field[1:0];
                             computed_irq_index = (raw_irq_index + state_machine_id) % 4;
                             irq_index_valid = 1'b1; // Always valid for relative addressing
@@ -783,33 +776,20 @@ module pio_cu #(
     
                             // Handle program counter advancement
                             if (irq_wait_flag) begin
-                                // IRQ with WAIT: check if we need to wait
-                                if (irq_clear_flag) begin
-                                    // IRQ CLEAR with WAIT: wait until IRQ is actually cleared
-                                    irq_waiting = irq_flags[computed_irq_index];
-                                end else begin
-                                    // IRQ SET with WAIT: wait until IRQ is cleared by system after we set it
-                                    irq_waiting = irq_flags[computed_irq_index];
-                                end
-        
-                                if (!irq_waiting) begin
-                                    // Condition met, advance PC
-                                    pc_write_en = 1'b1;
-                                    pc_src_sel = `PC_SRC_PLUS_ONE;
-                                end
-                                // If waiting, PC doesn't advance (handled by FSM)
+                                // IRQ with WAIT: Don't advance PC yet
+                                // FSM will transition to WAIT_CONDITION state
+                                // PC advances when wait condition is met
+                                pc_write_en = 1'b0;
                             end else begin
                                 // IRQ without WAIT: immediate execution, advance PC
                                 pc_write_en = 1'b1;
                                 pc_src_sel = `PC_SRC_PLUS_ONE;
-                                irq_waiting = 1'b0;  // Not waiting
                             end
                         
                         end else begin
                             // Invalid IRQ index - treat as NOP but advance PC
                             pc_write_en = 1'b1;
                             pc_src_sel = `PC_SRC_PLUS_ONE;
-                            irq_waiting = 1'b0;
                         end
                     end  
                                       
@@ -862,22 +842,11 @@ module pio_cu #(
             
             WAIT_CONDITION: begin
                 if (wait_condition_met) begin
-                    // Handle IRQ clearing for WAIT IRQ with polarity=1
-//                    if (opcode == `OC_WAIT && wait_source == 2'b10 && wait_polarity) begin
-                    if (wait_instr && wait_source == 2'b10 && wait_polarity) begin
-//                        logic [2:0] irq_index;  // moved to start of block
-                        if (wait_index[4]) begin
-                            irq_index = (wait_index[2:0] + state_machine_id) % 4;
-                        end else begin
-                            irq_index = wait_index[2:0];
-                        end
-                        irq_clear[irq_index] = 1'b1;
-                    end
-                    
-                    // Advance PC
+                    // Advance PC when wait condition is met
                     pc_write_en = 1'b1;
                     pc_src_sel = `PC_SRC_PLUS_ONE;
                 end
+                // Stay in wait state until condition is met
             end
  
 // ***************
