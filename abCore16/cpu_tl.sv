@@ -42,8 +42,8 @@ import mmio_reg_pkg::*;
 `include "abcore_interfaces.sv" // INCLUDE INTERFACES FILE
 
 // For Synthesis, comment out both defines
-//`define MEMORYMODELSIM    // use hex file
-//`define SIMSPEEDUPCLK     // use Testbench 12MHz clock
+`define MEMORYMODELSIM    // use hex file
+`define SIMSPEEDUPCLK     // use Testbench 12MHz clock
 
 module cpu_tl (
     input  logic clk_12MHz,
@@ -110,9 +110,9 @@ logic [31:0]  pio_gpio_out_o;
 logic         pio_irq_o;
 logic [31:0]  pio_gpio_dir_o;
 
-logic         pio_bootload_done;
-logic         pio_bootload_error; 
-logic [7:0]   irq_clear_cu;
+//logic         pio_bootload_done;
+//logic         pio_bootload_error; 
+//logic [7:0]   irq_clear_cu;
 logic [35:0]  dbg_bus_pio;
 
 // To reduce pin count for development board assign gpio_in_i here.
@@ -318,83 +318,25 @@ assign int2_timeout = int00_shft[5];  // Int#2
 //================================================================
 // Programmable Input/Output (PIO) Instance
 //================================================================  
-//logic pio_bootload_done;
-//logic pio_bootload_error; 
-//logic [7:0] irq_clear_cu;
+assign pio_gpio_in_i = 32'ha10b_ae2a;                 // TODO: assign to real pins
+
 pio_tl pio01 (
     .clk(clk),
     .rst_n(rst_n),
-    .pio_go(pio_bus.pio_go),
-        
+    .pio_bus(pio_bus.peripheral),         // PIO interface
     // GPIO interface
     .gpio_in(pio_gpio_in_i),
     .gpio_out( pio_gpio_out_o),
     .gpio_dir(pio_gpio_dir_o),
-        
-    // Configuration from interface
-    .execctrl_jmp_pin(pio_bus.execctrl_jmp_pin),
-    .shiftctrl_pull_thresh(pio_bus.shiftctrl_pull_thresh),
-    .shiftctrl_push_thresh(pio_bus.shiftctrl_push_thresh),
-    .autopush_enable(pio_bus.autopush_enable),
-    .autopull_enable(pio_bus.autopull_enable),
-    .pinctrl_in_base(pio_bus.pinctrl_in_base),
-    .pinctrl_out_base(pio_bus.pinctrl_out_base),
-    .pinctrl_out_count(pio_bus.pinctrl_out_count),
-    .state_machine_id(pio_bus.state_machine_id),
-    .bootload_start(pio_bus.bootload_start),
-    .program_select(pio_bus.program_select),
-    .bootload_done(pio_bootload_done),
-    .bootload_error(pio_bootload_error),
-        
-    // Instruction memory programming
-//    .imem_write_en(pio_bus.imem_write_en),
-//    .imem_write_addr(pio_bus.imem_write_addr),
-//    .imem_write_data(pio_bus.imem_write_data),
-        
-    // FIFO interfaces
-    .tx_fifo_wr_data(pio_bus.tx_fifo_wr_data),
-    .tx_fifo_wren(pio_bus.tx_fifo_wren),
-    .tx_fifo_full(pio_bus.tx_fifo_full),
-    .rx_fifo_rden(pio_bus.rx_fifo_rden),
-    .rx_fifo_datout(pio_bus.rx_fifo_datout),
-    .rx_fifo_mt(pio_bus.rx_fifo_mt),
-        
      // IRQ interface
-    .irq_flags_in(pio_bus.irq_flags_in),
-    .irq_flags_clear(pio_bus.irq_flags_clear),      // TODO: clear irq??
-    .irq_clear_cu(irq_clear_cu),                    // TODO: clear irq??
-    .irq_flags_set(pio_bus.irq_flags_set),
-        
-    // Additional shift control signals
-    .shiftctrl_in_count(pio_bus.shiftctrl_in_count),
-    .shiftctrl_in_shiftdir(pio_bus.shiftctrl_in_shiftdir),
-    .shiftctrl_autopush_en(pio_bus.shiftctrl_autopush_en),
-    .shiftctrl_autopush_thresh(pio_bus.shiftctrl_autopush_thresh),
-    .shiftctrl_autopull_en(pio_bus.shiftctrl_autopull_en),
-    .shiftctrl_autopull_thresh(pio_bus.shiftctrl_autopull_thresh),
-    .shiftctrl_out_shiftdir(pio_bus.shiftctrl_out_shiftdir),
-        
+//    .irq_flags_clear(pio_bus.irq_flags_clear),      // TODO: clear irq??
+//    .irq_clear_cu(irq_clear_cu),                    // TODO: clear irq??
     // Debug outputs
- //   .debug_pc(pio_bus.debug_pc),
-    .dbg_bus_pio(dbg_bus_pio),
-    .debug_waiting(pio_bus.debug_waiting)
+    .dbg_bus_pio(dbg_bus_pio)
 );
-
-assign pio_bus.bootload_done = pio_bootload_done;
-assign pio_bus.bootload_error = pio_bootload_error;
-
-// FOR now, PIO pin assignments
-logic pio_out_pin;
-assign pio_gpio_in_i = 32'ha10b_ae2a;                 // TODO: assign to real pins
-assign pio_out_pin = |pio_gpio_out_o;
-assign pio_bus.pio_out_pin = pio_out_pin;
   
 // IRQ generation
 assign pio_irq_o = |pio_bus.irq_flags_set;   // irq 0-7 ORed
-    
-// Connect instruction write request
-assign instr_write_req = pio_bus.tx_fifo_wren; // Reuse TX FIFO write for instruction programming
-    
     
 //================================================================
 // LED Control Logic
@@ -461,6 +403,8 @@ logic [81:0] probe0;
 
 //assign probe0 = { led3_o, uart_bus.tx_start, uart_bus.rx_fifo_avail, dmem_mmio_bus.wren,
 //                  dbg_bus_pic, dbg_bus_cu, dbg_bus_dp };
+                  
+//assign probe0 = { 46'h0, dbg_bus_pio};
                   
 assign probe0 = { led3_o, uart_bus.tx_start, uart_bus.rx_fifo_avail, dmem_mmio_bus.wren,
                   dbg_bus_pio, dbg_bus_cu, dbg_bus_dp };
