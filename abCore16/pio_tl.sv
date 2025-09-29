@@ -48,71 +48,17 @@
 module pio_tl (
     input  logic clk,
     input  logic rst_n,
-    input  logic pio_go,
-    
+    pio_if.peripheral   pio_bus,       // PIO interface
     // External GPIO interface
     input  logic [`GPIO_WIDTH-1:0] gpio_in,
     output logic [`GPIO_WIDTH-1:0] gpio_out,
     output logic [`GPIO_WIDTH-1:0] gpio_dir,
     
-    // Configuration registers
-    input  logic [4:0] execctrl_jmp_pin,
-    input  logic [4:0] shiftctrl_pull_thresh,
-    input  logic [4:0] shiftctrl_push_thresh,
-    input  logic       autopush_enable,
-    input  logic       autopull_enable,
-    input  logic [4:0] pinctrl_in_base,
-    input  logic [4:0] pinctrl_out_base,
-    input  logic [4:0] pinctrl_out_count,
-    input  logic [1:0] state_machine_id,
-    // PIO program bootloader
-    input  logic        bootload_start,
-    input  logic [3:0]  program_select,
-    output logic        bootload_done,
-    output logic        bootload_error,
-    
-    // Instruction Memory Programming Interface
-//    input  logic                  imem_write_en,
-//    input  logic [`INSTR_MEM_ADDR_WIDTH-1:0] imem_write_addr,
-//    input  logic [15:0]           imem_write_data,
-    
-    // FIFO interfaces
-    // TX Fifo  
-    input  logic [`REG_WIDTH-1:0] tx_fifo_wr_data,
-    input  logic                  tx_fifo_wren,
-    output logic                  tx_fifo_full,
-    // RX Fifo  
-    input  logic                  rx_fifo_rden,
-    output logic [`REG_WIDTH-1:0] rx_fifo_datout,
-    output logic                  rx_fifo_mt,
-    
     // IRQ interface
-    input  logic [7:0]            irq_flags_in,
-    output logic [7:0]            irq_flags_clear,
-    output logic [7:0]            irq_clear_cu,
-    output logic [7:0]            irq_flags_set,    // IRQ set requests
-    
-    // IN
-    input logic [4:0] shiftctrl_in_count,
-    input logic       shiftctrl_in_shiftdir,
-    input logic       shiftctrl_autopush_en,
-    input logic [4:0] shiftctrl_autopush_thresh,    
-    input logic       shiftctrl_autopull_en,
-    input logic [4:0] shiftctrl_autopull_thresh,
-    // OUT
-    // SHIFTCTRL_OUT_SHIFTDIR
-    input logic       shiftctrl_out_shiftdir,										
-    
+//    output logic [7:0]            irq_flags_clear,     // TODO: clear irq??
+//    output logic [7:0]            irq_clear_cu,        // TODO: clear irq??
     // Debug outputs
-//    output logic [`INSTR_MEM_ADDR_WIDTH-1:0] debug_pc,
-//    output logic [`REG_WIDTH-1:0]  debug_x_reg,
-//    output logic [`REG_WIDTH-1:0]  debug_y_reg,
-//    output logic [`REG_WIDTH-1:0]  debug_osr,
-//    output logic [4:0]             debug_osr_count,
-//    output logic [`REG_WIDTH-1:0]  debug_isr,
-//    output logic [4:0]             debug_isr_count,
-    output logic [35:0]            dbg_bus_pio,
-    output logic                   debug_waiting
+    output logic [35:0]            dbg_bus_pio
 );
 
     // Internal interconnect signals between control unit and datapath
@@ -213,6 +159,10 @@ module pio_tl (
 //	logic [4:0]  set_data;     // Data field (5 bits)
 //	assign set_data = instruction_data[4:0];    // Data value (5 bits) [4:0]
     
+    // FOR now: PIO pin assignments
+    logic pio_out_pin;
+    assign pio_out_pin = |gpio_out;
+    assign pio_bus.pio_out_pin = pio_out_pin;
     
     //================================================================
     // Control Unit Instantiation
@@ -225,7 +175,8 @@ module pio_tl (
     ) u_control_unit (
         .clk(clk),
         .rst_n(rst_n),
-        .pio_go(pio_go),
+//        .pio_go(pio_go),
+        .pio_go(pio_bus.pio_go),   // pio_bus
         
         // Instruction interface - only data input, no address output needed
         .instruction_data(instruction_data),
@@ -246,16 +197,16 @@ module pio_tl (
         
         // External status inputs
         .gpio_state(gpio_in),
-        .irq_flags(irq_flags_in),
+        .irq_flags(pio_bus.irq_flags_in),
 //        .tx_fifo_empty(tx_fifo_empty),                 // ab: from testbench
         .tx_fifo_empty(tx_fifo_mt),                      // ab: from TX Fifo
         .rx_fifo_full(rx_fifo_full),
         
         // Configuration inputs
-        .execctrl_jmp_pin(execctrl_jmp_pin),
+        .execctrl_jmp_pin(pio_bus.execctrl_jmp_pin),
 //        .shiftctrl_pull_thresh(shiftctrl_pull_thresh),
-        .pinctrl_in_base(pinctrl_in_base),
-        .state_machine_id(state_machine_id),
+        .pinctrl_in_base(pio_bus.pinctrl_in_base),
+        .state_machine_id(pio_bus.state_machine_id),
         
         // Control signal outputs to datapath
         .pc_write_en(cu_pc_write_en),
@@ -279,12 +230,12 @@ module pio_tl (
         .isr_shift_count(cu_isr_shift_count),
         .isr_shift_dir(cu_isr_shift_dir),
         .isr_counter_reset(cu_isr_counter_reset),
-        .shiftctrl_in_count(shiftctrl_in_count),
-        .shiftctrl_in_shiftdir(shiftctrl_in_shiftdir),
-        .shiftctrl_autopush_en(shiftctrl_autopush_en),
-        .shiftctrl_autopush_thresh(shiftctrl_autopush_thresh),
-        .shiftctrl_autopull_en(shiftctrl_autopull_en),
-        .shiftctrl_autopull_thresh(shiftctrl_autopull_thresh),													  
+        .shiftctrl_in_count(pio_bus.shiftctrl_in_count),
+        .shiftctrl_in_shiftdir(pio_bus.shiftctrl_in_shiftdir),
+        .shiftctrl_autopush_en(pio_bus.shiftctrl_autopush_en),
+        .shiftctrl_autopush_thresh(pio_bus.shiftctrl_autopush_thresh),
+        .shiftctrl_autopull_en(pio_bus.shiftctrl_autopull_en),
+        .shiftctrl_autopull_thresh(pio_bus.shiftctrl_autopull_thresh),													  
         .gpio_write_en(cu_gpio_write_en),
         .gpio_dir_write_en(cu_gpio_dir_write_en),
         .gpio_src_sel(cu_gpio_src_sel),
@@ -302,14 +253,11 @@ module pio_tl (
         .irq_set_operation(cu_irq_set_operation),
         .irq_wait_for_clear(cu_irq_wait_for_clear),
         .irq_target_index(cu_irq_target_index),
-//        .irq_set(irq_flags_set),                     // set in pio_dp
         
         .tx_fifo_read(tx_fifo_read),
         .rx_fifo_write(rx_fifo_write),
-        .irq_clear(irq_clear_cu),
         
         // Debug outputs
- //       .debug_pc(debug_pc),
         .dbg_pio_cu(dbg_pio_cu),
         .debug_waiting(debug_waiting),
         .debug_stalled()
@@ -344,12 +292,12 @@ module pio_tl (
         .osr_shift_en(cu_osr_shift_en),
         .osr_src_sel(cu_osr_src_sel),
         .osr_shift_count(cu_osr_shift_count),
-        .osr_shift_dir(shiftctrl_out_shiftdir),
+        .osr_shift_dir(pio_bus.shiftctrl_out_shiftdir),
         .osr_counter_reset(cu_osr_counter_reset),
-        .shiftctrl_pull_thresh(shiftctrl_pull_thresh),
-        .shiftctrl_push_thresh(shiftctrl_push_thresh),	
-        .autopush_enable(autopush_enable),
-        .autopull_enable(autopull_enable),												  
+        .shiftctrl_pull_thresh(pio_bus.shiftctrl_pull_thresh),
+        .shiftctrl_push_thresh(pio_bus.shiftctrl_push_thresh),	
+        .autopush_enable(pio_bus.autopush_enable),
+        .autopull_enable(pio_bus.autopull_enable),												  
         .isr_load_en(cu_isr_load_en),
         .isr_shift_en(cu_isr_shift_en),
         .isr_src_sel(cu_isr_src_sel),
@@ -384,8 +332,8 @@ module pio_tl (
         .mapped_pins(gpio_in), // TODO: Apply proper pin mapping logic
         
         // Configuration
-        .pinctrl_out_base(pinctrl_out_base),
-        .pinctrl_out_count(pinctrl_out_count),
+        .pinctrl_out_base(pio_bus.pinctrl_out_base),
+        .pinctrl_out_count(pio_bus.pinctrl_out_count),
         
         // Status outputs to control unit
         .pc_current(pc_current),
@@ -406,8 +354,8 @@ module pio_tl (
         .irq_set_operation(cu_irq_set_operation), 
         .irq_wait_for_clear(cu_irq_wait_for_clear),
         .irq_target_index(cu_irq_target_index),
-        .irq_set_request(irq_flags_set),
-        .irq_clear_request(irq_flags_clear),
+        .irq_set_request(pio_bus.irq_flags_set),
+        .irq_clear_request(pio_bus.irq_flags_clear),
         
         .dbg_pio_dp(dbg_pio_dp),
         
@@ -427,11 +375,11 @@ module pio_tl (
     fifo_TxRx TX_Fifo (
     .clk    (clk),              // input clk
     .srst   (!rst_n),           // input reset
-    .din    (tx_fifo_wr_data),  // input [31:0] din
-    .wr_en  (tx_fifo_wren),     // input wren
+    .din    (pio_bus.tx_fifo_wr_data),  // input [31:0] din
+    .wr_en  (pio_bus.tx_fifo_wren),     // input wren
     .rd_en  (tx_fifo_read),     // input rden
     .dout   (tx_fifo_datout),   // output [31:0] dout
-    .full   (tx_fifo_full),     // output full
+    .full   (pio_bus.tx_fifo_full),     // output full
     .empty  (tx_fifo_mt)        // output empty
     );
     
@@ -444,10 +392,10 @@ module pio_tl (
     .srst   (!rst_n),           // input reset
     .din    (rx_fifo_data),     // input [31:0] din
     .wr_en  (rx_fifo_write),    // input wren
-    .rd_en  (rx_fifo_rden),     // input rden
-    .dout   (rx_fifo_datout),   // output [31:0] dout
+    .rd_en  (pio_bus.rx_fifo_rden),     // input rden
+    .dout   (pio_bus.rx_fifo_datout),   // output [31:0] dout
     .full   (rx_fifo_full),     // output full
-    .empty  (rx_fifo_mt)        // output empty
+    .empty  (pio_bus.rx_fifo_mt)        // output empty
     );
     
     //================================================================
@@ -459,7 +407,7 @@ module pio_tl (
         .bl_read_en(bram_read_en),
         .bl_addr(bram_addr),
         .bl_instruction(bram_instruction),
-        .program_select(program_select),
+        .program_select(pio_bus.program_select),
         .pio_header_sav(pio_header_sav),
         .program_length(program_length),
         .program_start_addr(program_start_addr)
@@ -473,11 +421,16 @@ module pio_tl (
     logic [`INSTR_MEM_ADDR_WIDTH-1:0] imem_write_addr;
     logic [15:0]           imem_write_data;
     
+    logic bootload_done;
+    logic bootload_error;
+    assign pio_bus.bootload_done = bootload_done;
+    assign pio_bus.bootload_error = bootload_error;
+    
     pio_bootloader bootloader01 (
         .clk(clk),
         .rst_n(rst_n),
-        .bootload_start(bootload_start),
-        .program_select(program_select),
+        .bootload_start(pio_bus.bootload_start),
+        .program_select(pio_bus.program_select),
         .bootload_done(bootload_done),
         .bootload_error(bootload_error),
         .pio_header_sav(pio_header_sav),
@@ -531,7 +484,7 @@ module pio_tl (
         end
         else begin 
 //            dbg_bus_cu <= { 3'b000, enable_int_out, mmio_rden_out, int_cond_met, intrpt_in, pending_int_in , current_state[4:0] ,ir_opcode_reg[7:0]};
-            dbg_bus_pio <= { bootload_start, bootload_done, pio_go, instruction_data, 
+            dbg_bus_pio <= { pio_bus.bootload_start, bootload_done, pio_bus.pio_go, instruction_data, 
             dbg_pio_dp, dbg_pio_cu};
        end
     end
